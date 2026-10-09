@@ -93,6 +93,10 @@ claude plugin test <path to witness>
 
 The pure modules in `hooks/` each have a `*.test.ts` beside them. `hooks/register.tsx` is the hooks module, the only file that calls the engine.
 
+## Security
+
+To report a vulnerability, see `SECURITY.md`. Please do not open a public issue for one.
+
 ## License
 
 MIT. Copyright (c) 2026 Bradley Higginson. See `LICENSE`.

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 2026-10-09: `SECURITY.md`: how to report a vulnerability privately through GitHub's private vulnerability reporting, the supported versions, and what is in and out of scope. The README links it.
+
 ## 1.0.0 - 2026-10-09
 
 - 2026-10-09: A claim develops when it has at least one matched ask and every ask it matched is witnessed (`developByAsks` in `hooks/witness.ts`, run after the confirm tool and after each ask match). Writes the witness cannot read back (an `other:*` SQL function call, a git push) no longer keep such a claim pale for good; a claim no ask matched behaves as before.
