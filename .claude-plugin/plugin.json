@@ -1,0 +1,69 @@
+{
+  "name": "witness",
+  "version": "1.0.0",
+  "description": "Keeps a ledger of what you asked for and counts it done only on evidence: claims stay pale until a read-back confirms them, bare SQL UPDATE or DELETE writes are held for your answer, and a print of what was and was not witnessed goes into the session log.",
+  "author": {
+    "name": "Bradley Higginson"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "body": {
+      "type": "string",
+      "title": "Body",
+      "description": "The companion's body: phi (nautilus) or phial (round-bottom flask).",
+      "options": [
+        "phi",
+        "phial"
+      ],
+      "default": "phi"
+    },
+    "watchHold": {
+      "type": "boolean",
+      "title": "Hold the first prompt until the watch is taken",
+      "description": "On session start, and after five idle minutes, ask before the prompt goes through. Off by default.",
+      "default": false
+    },
+    "ticketScript": {
+      "type": "string",
+      "title": "Ticket script",
+      "description": "Path of the script that prints a status ticket as JSON (relative to the session folder, or absolute). Empty: scripts/estate-status.py beside the mod, and no ticket when it is absent.",
+      "default": ""
+    },
+    "watchScript": {
+      "type": "string",
+      "title": "Watch script",
+      "description": "Path of the script that reads the board for the watch and its poll. Empty: scripts/witness-watch.py in the mod's own repository, and no watch or poll when it is absent.",
+      "default": ""
+    },
+    "writerCalls": {
+      "type": "string",
+      "title": "Writer calls",
+      "description": "Comma-separated SQL functions a SELECT calls to write (schema.name; a trailing * matches any suffix). Default: the author's workspace functions, harmless where that schema does not exist.",
+      "default": "workspace.close_todo, workspace.set_todo_status, workspace.pause_todo, workspace.crosstalk_*, workspace.record_board_attention, workspace.claim_item, workspace.release_claim"
+    },
+    "person": {
+      "type": "string",
+      "title": "Your name",
+      "description": "How the print and the confirm tool name you. Default: you (\"on your words\"; the model reads \"the user\").",
+      "default": "you"
+    },
+    "sessionsDir": {
+      "type": "string",
+      "title": "Session log folder",
+      "description": "Where session logs live, relative to the session folder.",
+      "default": ".claude/sessions"
+    },
+    "goalsHeading": {
+      "type": "string",
+      "title": "Goals heading",
+      "description": "The session log heading whose checkbox items are the goals.",
+      "default": "## Goals"
+    },
+    "closeCommands": {
+      "type": "string",
+      "title": "Close commands",
+      "description": "Comma-separated commands that close a session; the print is written before they run.",
+      "default": "/close"
+    }
+  }
+}

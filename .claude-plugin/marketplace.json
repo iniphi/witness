@@ -1,0 +1,13 @@
+{
+  "name": "iniphi-witness",
+  "owner": {
+    "name": "iniphi"
+  },
+  "description": "witness, a Claude Code mod that counts an ask done only on evidence.",
+  "plugins": [
+    {
+      "name": "witness",
+      "source": "./"
+    }
+  ]
+}
