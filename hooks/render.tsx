@@ -13,25 +13,55 @@ import type { View } from './view'
 /** The estate-status ticket marks its trees with these keys (estate-status 0.2.4+). */
 export const TICKET_BAND_KEY = 'estate-band'
 
-type Beneath = { ticket: unknown; note: unknown; engine: unknown }
+/** The band's root key: a mod folded above learns that the witness is beneath it (1.3). */
+export const BAND_KEY = 'witness-band'
+
+/** The key of the host a mod folded beneath returns: its drawing first, then what stood beneath it (1.3). */
+export const GUEST_KEY = 'witness-guest'
+
+/** The guest's share of the band's body columns, and the narrowest body that gives it a column (1.3). */
+export const GUEST_SHARE = 0.382
+export const GUEST_MIN_BODY = 104
+
+/** The guest column's key, and the prefix by which a guest names its own drawing (the key of its root). */
+const GUEST_COLUMN_KEY = 'witness-guest-column'
+export const GUEST_OWNER_PREFIX = 'ammonite-'
+
+type Beneath = { ticket: unknown; note: unknown; engine: unknown; guest: unknown }
 
 function isEngine(el: any): boolean {
   return el === null || el === undefined || el.type === 'engine'
 }
 
+function isGuestHost(el: any): boolean {
+  return el?.props?.key === GUEST_KEY && Array.isArray(el.children)
+}
+
+/** The guest host's guest (its first child), and what stood beneath the guest. */
+function liftGuest(host: any): { guest: unknown; rest: unknown } {
+  const [guest, ...rest] = host.children
+  return { guest, rest: rest.length <= 1 ? rest[0] : rest }
+}
+
 /**
- * Pulls apart what stood beneath the companion. When the ticket's band is beneath
- * (witness above estate-status), its first child is the ticket line and its second
- * whatever stood beneath the ticket. Anything else beneath that draws (Claude Code's
- * own "Heads up" note) is a note the companion voices in its bubble. The engine's
- * own element is kept, drawn last, so nothing of the engine's is ever dropped.
+ * Pulls apart what stood beneath the companion. A guest host (1.3) is lifted out first:
+ * its first child is the guest, the rest is split as below. When the ticket's band is
+ * beneath (witness above estate-status), its first child is the ticket line and its second
+ * whatever stood beneath the ticket; a guest host may stand outside that band or inside it.
+ * Anything else beneath that draws (Claude Code's own "Heads up" note) is a note the
+ * companion voices in its bubble. The engine's own element is kept, drawn last, so nothing
+ * of the engine's is ever dropped.
  */
 export function splitBeneath(below: any): Beneath {
-  if (below?.props?.key === TICKET_BAND_KEY && Array.isArray(below.children)) {
-    const [ticket, rest] = below.children
-    return isEngine(rest) ? { ticket, note: null, engine: rest } : { ticket, note: rest, engine: null }
+  let guest: unknown = null
+  let rest: any = below
+  if (isGuestHost(rest)) ({ guest, rest } = liftGuest(rest))
+  let ticket: unknown = null
+  if (rest?.props?.key === TICKET_BAND_KEY && Array.isArray(rest.children)) {
+    ;[ticket, rest] = rest.children
+    if (guest === null && isGuestHost(rest)) ({ guest, rest } = liftGuest(rest))
   }
-  return isEngine(below) ? { ticket: null, note: null, engine: below } : { ticket: null, note: below, engine: null }
+  return isEngine(rest) ? { ticket, note: null, engine: rest, guest } : { ticket, note: rest, engine: null, guest }
 }
 
 /** The words of a tree: a Text's runs joined as drawn, a Box's children apart; the engine's own element has none. */
@@ -198,12 +228,15 @@ function tail(t: any, rows: number, eyeRow: number, show: boolean, ink: string |
  * the ticket is first read, the counts alone; one that could not be read shows as
  * `estate: ?`, never zeros.
  */
-function ticketLine(t: any, ticket: Ticket | null, status: string, ink: string | undefined): any {
+function ticketLine(t: any, ticket: Ticket | null, status: string, ink: string | undefined, sonar: SonarLine | null): any {
   const { Text } = t
+  // The sonar (1.2): `pods N`, and `!K` in warning colour while K files overlap with another pod.
+  const pods = sonar === null || sonar.text === '' ? null : <Text color={sonar.warn ? 'warning' : undefined}>{` · ${sonar.text}`}</Text>
   if (ticket === null) {
     return (
       <Text color={ink} dimColor={ink === undefined} wrap="truncate-end">
         {status}
+        {pods}
       </Text>
     )
   }
@@ -212,6 +245,7 @@ function ticketLine(t: any, ticket: Ticket | null, status: string, ink: string |
       <Text wrap="truncate-end">
         <Text dimColor>estate: ?</Text>
         <Text color={ink}>{` · ${status}`}</Text>
+        {pods}
       </Text>
     )
   }
@@ -227,9 +261,13 @@ function ticketLine(t: any, ticket: Ticket | null, status: string, ink: string |
       <Text color={ticket.warnInbox ? 'warning' : undefined}>{ticket.inbox}</Text>
       {` · Code to-dos ${ticket.todos}`}
       <Text color={ink}>{` · ${status}`}</Text>
+      {pods}
     </Text>
   )
 }
+
+/** The sonar's part of the one line (1.2): its text (`pods 2 !1`), warning while files overlap. */
+export type SonarLine = { text: string; warn: boolean }
 
 /** A cell on a sprite row that takes its own ink. */
 export type InkSpan = { col: number; color: string }
@@ -288,15 +326,22 @@ export function bandTree(
   eyeRow: number,
   ticket: Ticket | null,
   footer: QueueFooter = NO_FOOTER,
+  sonar: SonarLine | null = null,
 ): any {
   const { Box, Text } = t
   const ink = view.safelight ? SAFELIGHT : undefined
   const parts = splitBeneath(below)
+  // A guest (1.3) takes a left column from GUEST_MIN_BODY columns, and the band is laid out in
+  // the rest; narrower, the guest stands above the band at full width.
+  const hasGuest = parts.guest !== null && parts.guest !== undefined
+  const guestWide = hasGuest && bodyColumns >= GUEST_MIN_BODY
+  const guestWidth = guestWide ? Math.round(bodyColumns * GUEST_SHARE) : 0
+  const columns = bodyColumns - guestWidth
   const own = view.bubble
   const voice = view.safelight || parts.note === null ? own : null
   const speaking = voice !== null || parts.note !== null
   // The room left of the creature and its tail column.
-  const room = Math.max(BUBBLE_FRAME + 1, bodyColumns - SPRITE_WIDTH[view.size] - 1)
+  const room = Math.max(BUBBLE_FRAME + 1, columns - SPRITE_WIDTH[view.size] - 1)
   const width = bubbleWidth(room, voice, footerText(footer.onDismiss !== null, footer.n, footer.m))
   // The note from beneath keeps its own controls; the queue's count goes just after them.
   const count = countText(footer.n, footer.m)
@@ -308,12 +353,11 @@ export function bandTree(
   // the band's width by itself; only the rows inside it are sized.
   // An estate-status ticket still standing beneath (that mod enabled beside 0.3.0) is
   // dropped: the witness draws the ticket itself, so it is never drawn twice.
-  const line = ticketLine(t, ticket, view.status, ink)
+  const line = ticketLine(t, ticket, view.status, ink, sonar)
   // A held write's safelight colours the whole creature and wins over this.
   const meteredEyes = ink === undefined && ticket?.kind === 'ok' && ticket.warnPush
-  return (
-    <Box flexDirection="column">
-      <Box flexDirection="row" alignItems="flex-end">
+  const rows = (
+    <Box flexDirection="row" alignItems="flex-end">
         <Box flexDirection="column" width={room} flexShrink={0}>
           {speaking && (
             <Box
@@ -338,7 +382,26 @@ export function bandTree(
             </Text>
           ))}
         </Box>
-      </Box>
+    </Box>
+  )
+  // The engine's node stays a direct child of the root, under no sized Box, in every layout.
+  return (
+    <Box key={BAND_KEY} flexDirection="column">
+      {hasGuest && !guestWide && (
+        <Box key="witness-guest-above" flexDirection="column">
+          {parts.guest}
+        </Box>
+      )}
+      {guestWide ? (
+        <Box flexDirection="row" alignItems="flex-end">
+          <Box key={GUEST_COLUMN_KEY} flexDirection="column" flexShrink={0} width={guestWidth}>
+            {parts.guest}
+          </Box>
+          {rows}
+        </Box>
+      ) : (
+        rows
+      )}
       {parts.engine}
     </Box>
   )
@@ -421,19 +484,25 @@ export function barnaclesTree(
   barnacles: Barnacle[],
   onScrub: (key: string) => unknown,
   onScrubAll: () => unknown,
+  pairLines: readonly string[] = [],
+  onTreat: ((key: string) => unknown) | null = null,
 ): any {
   const { Box, Button, Text } = t
+  // The repair pairs (1.2): a failed call and the call that cured it, newest first.
+  const pairs = pairLines.slice(-PANE_PAIRS).reverse()
+  // Treat and wash (1.2, ruled 2026-10-09): treat asks the session for a fix; wash is the old scrub,
+  // for a false alarm. The buttons keep the scrub keys a wash has always had.
   return (
     <Box flexDirection="column">
       <Box flexDirection="row">
         <Box flexGrow={1} flexShrink={1}>
           <Text dimColor wrap="truncate-end">
-            Friction that recurs across sessions: the same problem on two or more days. Scrub one off, or all.
+            Friction that recurs across sessions. Treat one: the session proposes a fix. Wash one off: a false alarm.
           </Text>
         </Box>
         {barnacles.length > 0 && (
           <Box flexShrink={0} marginLeft={2}>
-            <Button key="scrub-all" label="scrub all" variant="primary" onPress={() => onScrubAll()} />
+            <Button key="scrub-all" label="wash all" variant="primary" onPress={() => onScrubAll()} />
           </Box>
         )}
       </Box>
@@ -444,14 +513,32 @@ export function barnaclesTree(
             <Text wrap="truncate-end">
               {'* '}
               {b.text}
-              <Text dimColor>{`  (${b.key})`}</Text>
+              <Text dimColor>{`  (${b.key})${b.treating !== undefined ? ' in treatment' : ''}`}</Text>
             </Text>
           </Box>
-          <Box flexShrink={0} marginLeft={2}>
-            <Button key={`scrub-${b.key}`} label="scrub" plain onPress={() => onScrub(b.key)} />
+          {onTreat !== null && (
+            <Box flexShrink={0} marginLeft={2}>
+              <Button key={`treat-${b.key}`} label="treat" plain onPress={() => onTreat(b.key)} />
+            </Box>
+          )}
+          <Box flexShrink={0} marginLeft={1}>
+            <Button key={`scrub-${b.key}`} label="wash" plain onPress={() => onScrub(b.key)} />
           </Box>
         </Box>
+      ))}
+      {pairs.length > 0 && (
+        <Text key="pairs-heading" dimColor>
+          {`Repair pairs (a failed call and the call that cured it), newest first, ${pairs.length} of ${pairLines.length}:`}
+        </Text>
+      )}
+      {pairs.map((line, i) => (
+        <Text key={`p${i}`} wrap="truncate-end">
+          {`~ ${line}`}
+        </Text>
       ))}
     </Box>
   )
 }
+
+/** Most repair pairs the Barnacles pane lists. */
+export const PANE_PAIRS = 12

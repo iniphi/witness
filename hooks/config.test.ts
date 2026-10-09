@@ -9,6 +9,8 @@ import {
   personRef,
   readConfig,
   scriptCandidates,
+  sonarOn,
+  typedHandsStart,
   writerPattern,
 } from './config'
 import { parseGoals, PRINT_END } from './asks'
@@ -41,6 +43,28 @@ test('options override each default; blank values fall back', () => {
   expect(c.closeCommands).toEqual(['/wrapup', '/end'])
   expect([c.person, c.sessionsDir, c.goalsHeading]).toEqual(['Ada', '.claude/sessions', '### Aims'])
   expect(listOf(' , a ,, b ')).toEqual(['a', 'b'])
+})
+
+test('the sonar runs where the estate is by default, and on or off when set (1.2)', () => {
+  expect(readConfig(undefined).sonar).toEqual('auto')
+  expect(readConfig({ sonar: 'on' }).sonar).toEqual('on')
+  expect(readConfig({ sonar: 'loud' }).sonar).toEqual('auto')
+  expect([sonarOn('auto', true), sonarOn('auto', false), sonarOn('on', false), sonarOn('off', true)]).toEqual([true, false, true, false])
+})
+
+// Ruled 2026-10-09: typed hands wait for Enter by default; they start work unattended only where
+// the estate is found (auto) or when set to start.
+test('typed hands start work only where the estate is, or when set to start', () => {
+  expect(readConfig(undefined).typedHands).toEqual('auto')
+  expect(readConfig({ typedHands: 'start' }).typedHands).toEqual('start')
+  expect(readConfig({ typedHands: 'wait' }).typedHands).toEqual('wait')
+  expect(readConfig({ typedHands: 'yes' }).typedHands).toEqual('auto')
+  expect([
+    typedHandsStart('auto', true),
+    typedHandsStart('auto', false),
+    typedHandsStart('start', false),
+    typedHandsStart('wait', true),
+  ]).toEqual([true, false, true, false])
 })
 
 test('paths normalise: backslashes, dot segments, a drive kept', () => {

@@ -240,7 +240,7 @@ test('every prop cell lies on a free cell of every compact Phi frame, except GRI
       const isGrip = r === GRIP[0] && c === GRIP[1]
       const isCorner = CORNERS.some(([a, b]) => a === r && b === c)
       if (prop === 'compass' && isGrip) for (const ch of under) expect('~-≈').toContain(ch)
-      else if (prop === 'horns' && isCorner) expect(under).toEqual(['.', '.', '.'])
+      else if ((prop === 'horns' || prop === 'devil') && isCorner) expect(under).toEqual(['.', '.', '.'])
       else expect(under).toEqual([' ', ' ', ' '])
     }
   }
@@ -269,10 +269,24 @@ test('withProp dresses the compact Phi only, keeps every width, and leaves its i
   expect(eyeCellsOf(dressed, 'phi', 'compact')).toEqual([[2, 10]])
 })
 
+test('the devil is the horns /( )\\ over the shell top: the two corners and the blank outside each', () => {
+  expect(FRAMES.devil.compact[0]![0]).toEqual('  /(    )\\    ')
+  expect(propCells('devil').map(([r, c]) => [r, c])).toEqual([[0, 2], [0, 3], [0, 8], [0, 9]])
+  for (let i = 0; i < 3; i++) {
+    const rows = frame('phi', 'compact', i)
+    const out = withProp(rows, 'phi', 'compact', 'devil')
+    expect(out[0]!.slice(2, 10)).toMatch(/^\/\(.{4}\)\\$/)
+    expect(out[0]!.slice(4, 8)).toEqual(rows[0]!.slice(4, 8))
+    expect(out.slice(1)).toEqual(rows.slice(1))
+    expect(Array.from(out[0]!).length).toEqual(14)
+  }
+})
+
 test('parseCostume reads the word after /wear', () => {
   expect(parseCostume('razor')).toEqual('razor')
   expect(parseCostume('  Compass ')).toEqual('compass')
   expect(parseCostume('horns')).toEqual('horns')
+  expect(parseCostume('Devil')).toEqual('devil')
   expect(parseCostume('none')).toEqual('none')
   expect(parseCostume('off')).toEqual('none')
   expect(parseCostume('')).toBeNull()

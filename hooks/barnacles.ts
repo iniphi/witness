@@ -37,9 +37,12 @@ function cancelled(c: FrictionInput, at: number): Friction[] {
   // status; a successful result whose rows say "cancelled" is data (a field report).
   const sqlCancelled =
     /execute_sql/.test(c.tool) && (c.isError ? /cancel/i.test(c.resultText) : CANCEL_STATUS.test(c.resultText))
-  const denied = c.isError && /\b(denied|permission to use|blocked by|not permitted)\b/i.test(c.resultText)
+  // A guard's refusal is a refused write too (Bradley, 2026-10-09: the shell guard's
+  // "Refusing a heredoc" went unrecorded), so a PreToolUse hook error counts.
+  const denied =
+    c.isError && /\b(denied|refus(?:ed|ing|al)|permission to use|blocked by|not permitted|hook error)\b/i.test(c.resultText)
   if (!sqlCancelled && !denied) return []
-  const detail = sqlCancelled ? 'write cancelled at the prompt' : 'call denied'
+  const detail = sqlCancelled ? 'write cancelled at the prompt' : `call refused: ${gist(c.resultText)}`
   return [{ kind: 'cancelled-write', key: c.tool, at, detail }]
 }
 

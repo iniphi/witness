@@ -55,6 +55,17 @@ test('frictionFrom flags a denied call', () => {
   expect(frictionFrom({ ...base, tool: 'Bash', resultText: 'ok' })).toEqual([])
 })
 
+// Bradley, 2026-10-09: the shell guard's "Refusing a heredoc" went unrecorded. A guard's
+// refusal is a refused write, kept with its reason, and never also a failing call.
+test('frictionFrom flags a PreToolUse hook refusal as a refused write, with the reason, once', () => {
+  const text =
+    'PreToolUse:Bash hook error: [python shell-guard.py]: Refusing a heredoc/here-string combined with a file write in the same command.'
+  const out = frictionFrom({ ...base, tool: 'Bash', isError: true, resultText: text, recent: [call('Bash', {}, true, 1)] })
+  expect(out.map((x) => [x.kind, x.key])).toEqual([['cancelled-write', 'Bash']])
+  expect(out[0]!.detail).toContain('call refused: PreToolUse:Bash hook error')
+  expect(out[0]!.detail).toContain('Refusing a heredoc')
+})
+
 test('frictionFrom flags the second consecutive failure of one tool', () => {
   const second = frictionFrom({
     ...base,

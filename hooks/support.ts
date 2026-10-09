@@ -42,6 +42,7 @@ export function storeKeys(key: string): {
   barnacles: string
   candidates: string
   scrubbed: string
+  repairs: string
 } {
   return {
     carry: `carry:${key}`,
@@ -50,6 +51,8 @@ export function storeKeys(key: string): {
     candidates: `candidates:${key}`,
     // When each barnacle key was last scrubbed off the shell (/barnacles, 1.1): epoch ms by key.
     scrubbed: `scrubbed:${key}`,
+    // The project's repair pairs (1.2): a failed call and the call that cured it, newest last.
+    repairs: `repairs:${key}`,
   }
 }
 

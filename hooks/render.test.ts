@@ -1,20 +1,34 @@
 import { test, expect } from 'claude-code/testing'
 
-import { TICKET_BAND_KEY, beneathText, bubbleWidth, fitWidth, rowInks, splitBeneath, withCount } from './render'
+import {
+  BAND_KEY,
+  GUEST_KEY,
+  GUEST_MIN_BODY,
+  GUEST_SHARE,
+  TICKET_BAND_KEY,
+  bandTree,
+  beneathText,
+  bubbleWidth,
+  fitWidth,
+  rowInks,
+  splitBeneath,
+  withCount,
+} from './render'
 
 import { mirror } from './view'
 
 const ENGINE = { type: 'engine', ref: 0 }
 const text = (t: string) => ({ type: 'Text', props: {}, children: [t] })
 
-test('nothing beneath: the engine element is kept, no ticket, no note', () => {
-  expect(splitBeneath(ENGINE)).toEqual({ ticket: null, note: null, engine: ENGINE })
-  expect(splitBeneath(undefined)).toEqual({ ticket: null, note: null, engine: undefined })
+// The first test of the file pays the cold load: a budget for a loaded machine (S170).
+test('nothing beneath: the engine element is kept, no ticket, no note', { timeoutMs: 15_000 }, () => {
+  expect(splitBeneath(ENGINE)).toEqual({ ticket: null, note: null, engine: ENGINE, guest: null })
+  expect(splitBeneath(undefined)).toEqual({ ticket: null, note: null, engine: undefined, guest: null })
 })
 
 test('a note beneath (the Heads up) is voiced, never treated as the ticket', () => {
   const note = text('Heads up')
-  expect(splitBeneath(note)).toEqual({ ticket: null, note, engine: null })
+  expect(splitBeneath(note)).toEqual({ ticket: null, note, engine: null, guest: null })
 })
 
 test('beneathText reads the note from beneath as drawn: runs joined, boxes apart, never the ticket or the engine', () => {
@@ -32,9 +46,92 @@ test('the ticket band beneath is pulled apart: ticket on top, its own beneath vo
   const ticket = text('overseer: inbox 5')
   const note = text('Heads up')
   const band = { type: 'Box', props: { key: TICKET_BAND_KEY }, children: [ticket, note] }
-  expect(splitBeneath(band)).toEqual({ ticket, note, engine: null })
+  expect(splitBeneath(band)).toEqual({ ticket, note, engine: null, guest: null })
   const quiet = { type: 'Box', props: { key: TICKET_BAND_KEY }, children: [ticket, ENGINE] }
-  expect(splitBeneath(quiet)).toEqual({ ticket, note: null, engine: ENGINE })
+  expect(splitBeneath(quiet)).toEqual({ ticket, note: null, engine: ENGINE, guest: null })
+})
+
+// 1.3: the guest seam. A mod folded beneath returns <Box key="witness-guest">{guest}{below}</Box>.
+const GUEST = { type: 'Box', props: { key: 'ammonite-facing' }, children: [text('Ammonite words')] }
+const host = (...rest: unknown[]) => ({ type: 'Box', props: { key: GUEST_KEY }, children: [GUEST, ...rest] })
+
+test('the seam keys and sizes are the contract', () => {
+  expect(BAND_KEY).toBe('witness-band')
+  expect(GUEST_KEY).toBe('witness-guest')
+  expect(GUEST_SHARE).toBe(0.382)
+  expect(GUEST_MIN_BODY).toBe(104)
+})
+
+test('a guest host is lifted out and the rest split as before, in either nesting order', () => {
+  const ticket = text('overseer: inbox 5')
+  const note = text('Heads up')
+  expect(splitBeneath(host(ENGINE))).toEqual({ ticket: null, note: null, engine: ENGINE, guest: GUEST })
+  expect(splitBeneath(host(note))).toEqual({ ticket: null, note, engine: null, guest: GUEST })
+  const tickBand = (rest: unknown) => ({ type: 'Box', props: { key: TICKET_BAND_KEY }, children: [ticket, rest] })
+  // The host outside the ticket band, and the host inside it.
+  expect(splitBeneath(host(tickBand(ENGINE)))).toEqual({ ticket, note: null, engine: ENGINE, guest: GUEST })
+  expect(splitBeneath(host(tickBand(note)))).toEqual({ ticket, note, engine: null, guest: GUEST })
+  expect(splitBeneath(tickBand(host(ENGINE)))).toEqual({ ticket, note: null, engine: ENGINE, guest: GUEST })
+  expect(splitBeneath(tickBand(host(note)))).toEqual({ ticket, note, engine: null, guest: GUEST })
+})
+
+test('the guest\'s words are never read as a heads-up note', () => {
+  expect(beneathText(host(ENGINE))).toBe('')
+  expect(beneathText(host(text('Heads up')))).toBe('Heads up')
+})
+
+// A stand-in element table: the JSX factory builds nodes from these tags.
+const TABLE = { Box: 'Box', Text: 'Text', Button: 'Button' }
+const kids = (n: any): any[] => {
+  const c = n?.children ?? n?.props?.children
+  return c === undefined || c === null ? [] : Array.isArray(c) ? c.flat(Infinity) : [c]
+}
+function find(n: any, pred: (n: any) => boolean): any[] {
+  if (n === null || typeof n !== 'object') return []
+  return [...(pred(n) ? [n] : []), ...kids(n).flatMap(c => find(c, pred))]
+}
+/** Engine nodes found under any Box that has a numeric or percent width. */
+function engineUnderWidth(n: any, sized: boolean): number {
+  if (n === null || typeof n !== 'object') return 0
+  if (n.type === 'engine') return sized ? 1 : 0
+  const w = n.props?.width
+  const here = sized || (n.type === 'Box' && w !== undefined)
+  return kids(n).reduce((a: number, c: any) => a + engineUnderWidth(c, here), 0)
+}
+
+function bandFor(body: number, below: unknown): any {
+  const view: any = { size: 'compact', sprite: [' ', ' ', ' ', ' ', ' '], colour: undefined, safelight: false, eyes: [], bells: [], barnacles: [], costume: [], status: 'asks 0/0', speech: [], bubble: null }
+  return bandTree(TABLE, body, view, below, 2, null)
+}
+
+test('bandTree: the root carries the band key; without a guest nothing else changes', () => {
+  const tree = bandFor(115, ENGINE)
+  expect(tree.props.key).toBe(BAND_KEY)
+  expect(find(tree, n => n.props?.key === 'witness-guest-column')).toEqual([])
+  expect(kids(tree).at(-1)).toBe(ENGINE)
+})
+
+test('bandTree with a guest: wide takes a 38.2 column and witness the rest; narrow stacks the guest above', () => {
+  const wide = bandFor(115, host(ENGINE))
+  const col = find(wide, n => n.props?.key === 'witness-guest-column')
+  expect(col.length).toBe(1)
+  expect(col[0].props.width).toBe(44)
+  expect(col[0].props.flexShrink).toBe(0)
+  expect(find(col[0], n => n === GUEST).length).toBe(1)
+  expect(kids(wide).at(-1)).toBe(ENGINE)
+  expect(engineUnderWidth(wide, false)).toBe(0)
+  const edge = bandFor(GUEST_MIN_BODY, host(ENGINE))
+  expect(find(edge, n => n.props?.key === 'witness-guest-column').length).toBe(1)
+  const narrow = bandFor(75, host(ENGINE))
+  expect(find(narrow, n => n.props?.key === 'witness-guest-column')).toEqual([])
+  expect(find(narrow, n => n === GUEST).length).toBe(1)
+  expect(engineUnderWidth(narrow, false)).toBe(0)
+  expect(kids(narrow).at(-1)).toBe(ENGINE)
+  // The guest above is in a wrapper with no width of its own.
+  const holder = find(narrow, n => kids(n).includes(GUEST))[0]
+  expect(holder.props?.width).toBeUndefined()
+  // With a note and no engine beneath, nothing sized holds an engine node either.
+  expect(engineUnderWidth(bandFor(115, host(text('Heads up'))), false)).toBe(0)
 })
 
 // Seen live (S162): a note sized to the whole band spilled off the left edge of the bubble.

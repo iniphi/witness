@@ -51,7 +51,8 @@ async function writeLog($: any, name = '2026-10-08-1036.md'): Promise<void> {
 
 // The costume seam (Bradley, 2026-10-09): /wear dresses Phi in the band; a later organ
 // calls it through $.command.run. The razor reads \== ahead of the tentacle tip on screen.
-test('/wear dresses Phi, checks the word after it, and none undresses it (1.1)', async ($, on) => {
+// The first test of the file pays the plugin's cold load: a budget for a loaded machine (S170).
+test('/wear dresses Phi, checks the word after it, and none undresses it (1.1)', { timeoutMs: 15_000 }, async ($, on) => {
   const clock = ticketWorld(on, null)
   await start($)
   await clock.advance(1)
@@ -267,7 +268,9 @@ test('a hold answered Add RETURNING is noted, so the print can list it', async (
   await start($)
   await $.tool.call({ tool: SQL, project_id: 'p', query: BARE } as any)
   await $.session.end({ reason: 'other' } as any)
-  const noted: any[] = (stored.filter((x) => x.key === 'friction:c:/work/proj').pop()?.value as any[]) ?? []
+  // Friction is kept per session since 1.2: this session's own slot, `friction:<project>:<session>`.
+  const slot: any = stored.filter((x) => x.key.startsWith('friction:c:/work/proj:')).pop()?.value
+  const noted: any[] = slot?.entries ?? []
   expect(noted.map((f) => f.kind)).toEqual(['returning-added'])
   expect(noted[0].detail).toContain('UPDATE workspace.todo_mirror')
 })

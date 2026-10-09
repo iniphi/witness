@@ -33,6 +33,27 @@ export type Config = {
   sessionsDir: string
   goalsHeading: string
   closeCommands: readonly string[]
+  /** The sonar (1.2): `auto` runs it where the estate is present, `on` always, `off` never. */
+  sonar: SonarSetting
+  /** Typed hands (1.3.3): `auto` starts work where the estate is present, `start` always, `wait` never. */
+  typedHands: TypedHandsSetting
+}
+
+export type SonarSetting = 'auto' | 'on' | 'off'
+export type TypedHandsSetting = 'auto' | 'start' | 'wait'
+
+/** Whether this load runs the sonar: heartbeats, overlaps and hands write files under ~/.claude/state. */
+export function sonarOn(setting: SonarSetting, estate: boolean): boolean {
+  return setting === 'on' || (setting === 'auto' && estate)
+}
+
+/**
+ * Whether a hand typed in another session may start work here unattended (ruled 2026-10-09).
+ * A hand is taken on the engine's plugin stamp, which its own types call only the sender's
+ * claim, so by default (no estate) a typed hand waits for Enter like a Claude-written one.
+ */
+export function typedHandsStart(setting: TypedHandsSetting, estate: boolean): boolean {
+  return setting === 'start' || (setting === 'auto' && estate)
 }
 
 /** The adapters found at session start: null is off. */
@@ -62,6 +83,8 @@ export function readConfig(options: unknown): Config {
     sessionsDir: text(o.sessionsDir) || DEFAULT_SESSIONS_DIR,
     goalsHeading: text(o.goalsHeading) || DEFAULT_GOALS_HEADING,
     closeCommands: close.length > 0 ? close : [...DEFAULT_CLOSE_COMMANDS],
+    sonar: o.sonar === 'on' || o.sonar === 'off' ? o.sonar : 'auto',
+    typedHands: o.typedHands === 'start' || o.typedHands === 'wait' ? o.typedHands : 'auto',
   }
 }
 

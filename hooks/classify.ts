@@ -181,10 +181,12 @@ function splitRedirects(raw: string[]): { words: string[]; targets: string[] } {
   return { words, targets }
 }
 
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+
 /** One segment's words from its command word on (env assignments, `&`, sudo skipped), and its redirect targets. */
 function commandWords(seg: string): { cmd: string[]; targets: string[] } {
   const { words, targets } = splitRedirects(tokenize(seg))
-  const start = words.findIndex((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && w !== '&' && w !== 'sudo')
+  const start = words.findIndex((w) => !ASSIGNMENT.test(w) && w !== '&' && w !== 'sudo')
   return { cmd: start < 0 ? [] : unwrapCompound(words.slice(start), seg), targets }
 }
 
@@ -196,7 +198,8 @@ const CLOSERS = new Set(['fi', 'done', '}'])
 
 function unwrapCompound(words: string[], seg: string): string[] {
   let i = 0
-  while (i < words.length && OPENERS.has(words[i] ?? '')) i++
+  // An assignment after an opener (`do n=$((...))`) is skipped as one at the head is (F1, 2026-10-09).
+  while (i < words.length && (OPENERS.has(words[i] ?? '') || ASSIGNMENT.test(words[i] ?? ''))) i++
   const rest = words.slice(i)
   const head = rest[0] ?? ''
   if (CLOSERS.has(head)) return []
@@ -399,8 +402,9 @@ function closingParen(s: string, open: number): number {
  * Command substitutions pulled out of a command: `$(...)`, backticks, and the process
  * substitutions `<(...)` / `>(...)`. Each is a command of its own (S164: `echo $(rm x)`
  * was classed by `echo` alone, so the write went unseen). `$((...))` is arithmetic and
- * runs nothing; single quotes and a backslash keep `$(` literal. An unclosed one leaves
- * `balanced` false, which the unknown-write rule reads as a command it cannot judge.
+ * runs nothing of its own, but a substitution inside it runs (`$(( $(rm x) ))`), so its
+ * body is read for them; single quotes and a backslash keep `$(` literal. An unclosed one
+ * leaves `balanced` false, which the unknown-write rule reads as a command it cannot judge.
  */
 export function substitutions(command: string): { outer: string; inner: string[]; balanced: boolean } {
   let outer = ''
@@ -429,7 +433,11 @@ export function substitutions(command: string): { outer: string; inner: string[]
       const end = closingParen(command, i + 1)
       if (end < 0) return { outer: outer + command.slice(i), inner, balanced: false }
       const arithmetic = !process && command[i + 2] === '('
-      if (!arithmetic) inner.push(command.slice(i + 2, end))
+      if (arithmetic) {
+        const nested = substitutions(command.slice(i + 3, end - 1))
+        if (!nested.balanced) return { outer: outer + command.slice(i), inner, balanced: false }
+        inner.push(...nested.inner)
+      } else inner.push(command.slice(i + 2, end))
       outer += SUBSTITUTED
       i = end
       continue
@@ -623,7 +631,7 @@ function known(call: ToolCall, input: Record<string, unknown>, resultText: strin
 
 const READONLY_WORDS = new Set([
   'diff', 'ls', 'dir', 'wc', 'stat', 'echo', 'printf', 'pwd', 'which', 'where', 'type', 'test', '[',
-  'true', 'date', 'sort', 'uniq', 'cut', 'tr', 'basename', 'dirname', 'realpath', 'cd',
+  'true', 'false', ':', 'continue', 'break', 'date', 'sort', 'uniq', 'cut', 'tr', 'basename', 'dirname', 'realpath', 'cd',
   'get-childitem', 'get-location', 'test-path', 'select-string',
 ])
 const KNOWN_WRITE_WORDS = new Set(['rm', 'mv', 'cp', 'tee'])

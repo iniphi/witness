@@ -70,6 +70,14 @@ export const FRAMES: Table<Frames> & Record<Prop, { compact: Frames }> = {
       ['   9    9     ', '              ', '              ', '              ', '              '],
     ],
   },
+  devil: {
+    compact: [
+      // The horns /(_‿__)\ over the shell top (1.3): the two corner dots and the blank cell
+      // outside each. Stored facing right; the band's mirror turns it. Worn by Phi for one
+      // draw while a guest drawing stands narrow above the band, never by /wear's atom alone.
+      ['  /(    )\\    ', '              ', '              ', '              ', '              '],
+    ],
+  },
 }
 
 /** Eye cells per frame ([row, col]); Phi has one, Phial two (left then right). */
@@ -118,7 +126,7 @@ const BARNACLES: Table<Cell[]> = {
  */
 export const GRIP: Cell = [3, 10]
 
-/** The shell's two top corners, which the horns replace. */
+/** The shell's two top corners, which the horns (and the devil, with the blank beside each) replace. */
 export const CORNERS: Cell[] = [[0, 3], [0, 8]]
 
 const FILLED = '●'
@@ -213,7 +221,7 @@ export function withBarnacles(rows: string[], body: Body, size: Size, count: num
   return put(rows, cells, cells.map(() => '*'))
 }
 
-export const PROPS: readonly Prop[] = ['razor', 'compass', 'horns']
+export const PROPS: readonly Prop[] = ['razor', 'compass', 'horns', 'devil']
 
 /** The word after /wear: a prop, `none` (or `off`) to undress, null for anything else or nothing. */
 export function parseCostume(args: unknown): Costume | null {

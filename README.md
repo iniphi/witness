@@ -12,6 +12,7 @@ witness is a plugin of function hooks. It sits in the session beside you, keeps 
 - **The confirm tool.** The agent reports a finished ask through the `confirm` tool and must cite evidence: a tool result already in the session, or your words. It can mark an ask dropped only on your words. A close paraphrase of an ask is accepted when exactly one live ask clearly matches. If a turn calls something done without proof, the next prompt carries one short line asking the agent to confirm it.
 - **The print.** `/wrap` writes a Witness print into the open session log: asks witnessed, pale and open, writes held, friction, notes taken, and hook or skill candidates. It then hands the print to the main session, which settles what is done and says what each open line waits on, without starting new work. The close command (default `/close`) writes the same print before it runs. A project with no session log gets the print attached to the close prompt.
 - **The companion.** A nautilus (or a flask, by `body`) at the right of the band, facing the line. Its colour deepens as more of the session's claims are proved. A chime of three bells hangs at its back, an hour of active work each, filling from the bottom with a half bell for thirty minutes; `*` barnacles on its shell are friction that recurs across sessions (a cancelled or refused write, a call that keeps failing, an MCP tool's error; never the edits of a file you are building), and `/barnacles` lists what they record and scrubs them off; its eye turns amber in a repository whose push would start a metered build, and the whole creature turns red while a write is held. The bells and the barnacles wear their own inks. `/wear` dresses it in a costume.
+- **The guest seam (1.3).** The band root is keyed `witness-band`. A mod folded beneath the witness can return a host keyed `witness-guest` holding its own drawing first and what stood beneath it second; the witness lifts the guest out (never reading its words as a heads-up note) and draws it: from 104 body columns in a left column of 38.2%, with the band laid out in the rest; narrower, above the band at full width. The engine's own node stays at the band root, under no sized Box. While a guest from a mod that names its drawing with the `ammonite-` key prefix stands narrow, the companion wears the `devil` horns for that draw only.
 
 ## Install
 
@@ -45,14 +46,18 @@ Set these with `/config` or when you install. Every key is optional.
 | `sessionsDir` | `.claude/sessions` | Where session logs live, relative to the session folder. |
 | `goalsHeading` | `## Goals` | The session log heading whose checkbox items are goals. The section ends at the next heading of the same level. |
 | `closeCommands` | `/close` | Commands that close a session, separated by commas. The print is written before they run. |
+| `sonar` | `auto` | Heartbeats between the sessions running on this machine, overlap alerts and `/hand`. `auto` turns it on only where a ticket script is found; `on` and `off` force it. It writes small files under `~/.claude/state/witness-sonar` (see Footprint). |
+| `typedHands` | `auto` | Whether a `/hand` you typed in another session starts work in the receiving session without an Enter. `auto` allows it only where a ticket script is found; `start` always; `wait` never. A hand is recognised by a plugin stamp that Claude Code passes on as the sender's own claim, so any installed plugin could claim it; `wait` is the safe choice, and is what `auto` gives you without a ticket script. |
 
 ## Commands
 
 - `/undone` lists every ask in this watch: witnessed, pale or open.
 - `/wrap` ends the watch, writes the print into the session log and hands it to the main session to settle.
 - `/tackle` puts a prompt in the prompt box for a run over the undone asks. You read it and decide whether to send it. It never sends on its own.
-- `/barnacles` opens a pane with what each barnacle on the shell records, a `scrub` beside each and a `scrub all`. A scrubbed barnacle leaves the shell at once, and the moment the same friction is recorded again it is back with its old words, unspoken, so you hear it again: the scrub did not hold.
-- `/wear razor`, `/wear compass`, `/wear horns` dress the companion for the session; `/wear none` undresses it. A costume is how a later companion plugin shows which role is speaking, and another plugin can set one through the same command.
+- `/barnacles` opens a pane with what each barnacle on the shell records, and `treat` and `wash` beside each. **Treat** puts the barnacle's evidence in your prompt box for Claude to propose one fix; once you accept it and it lands, Claude's `treated` call takes the barnacle off (only for one you put in treatment, and only after something was written). **Wash** takes it off with no fix, for a false alarm; `wash all` washes every one. Either way, the moment the same friction is recorded again it is back, unspoken, so you hear it again: the fix or the wash did not hold. Under the barnacles the pane lists the project's repair pairs: a call that failed, the call that cured it, what changed between them and roughly what the failed attempts cost.
+- `/pods` (sonar on) lists the other live sessions on this machine: what each is on, when it last beat, and any file you both wrote. The one line shows `pods N`, with `!K` in the warning colour while K files overlap.
+- `/hand <number|name> <what to do>` (sonar on) hands work to another live session. A hand you type waits in that session's prompt box for your Enter, or, where `typedHands` allows it, starts that session's turn once it is idle. A hand Claude writes (its `hand` tool) lands in that session's prompt box and waits for your Enter; it never starts work on its own and never goes over a draft.
+- `/wear razor`, `/wear compass`, `/wear horns`, `/wear devil` dress the companion for the session; `/wear none` undresses it. A costume is how a later companion plugin shows which role is speaking, and another plugin can set one through the same command.
 - **Dismiss.** There is no `/dismiss` command. While witness is showing a notice that can be dismissed, a `0: Dismiss` button sits at its foot, bound to the `0` key. A held write is never dismissed, only answered. When more than one notice is waiting, `<n/m>` shows your place in the queue.
 
 ## Footprint
@@ -63,16 +68,18 @@ Set these with `/config` or when you install. Every key is optional.
 - the tool calls the session makes and their results (to match claims against read-backs);
 - the open session log in `sessionsDir`;
 - your Claude Code settings;
-- the output of `ticketScript` and `watchScript`, if they are set or found.
+- the output of `ticketScript` and `watchScript`, if they are set or found;
+- with the sonar on, the other sessions' heartbeat files and any hand file left for this session.
 
 **What it writes:**
 
 - `~/.claude/state/witness-usage/<day>/<session>.json`: the token counts the API reported for each of witness's own side passes and each model turn. Nothing is written if neither `USERPROFILE` nor `HOME` is set.
 - The Witness print, appended to the open session log at `/wrap` and at the close command.
 - Hook and skill candidates, appended to `reports/witness-candidates.md` when the session folder has a `reports/` folder, and to `.claude/witness-candidates.md` otherwise.
-- The plugin's own store in Claude Code, which keeps the carried asks, friction, candidates and held-write notes from one session to the next.
+- The plugin's own store in Claude Code, which keeps the carried asks, friction, repair pairs, candidates and held-write notes from one session to the next. A repair pair keeps one line of each call's input (at most 300 characters), never its result.
+- With the sonar on: `~/.claude/state/witness-sonar/<day>/<session>.json`, this session's heartbeat every 30 seconds, holding the folder, up to three of its open asks (one line each), the asks count and the paths of the files it wrote in the last 30 minutes; and, when a hand cannot be delivered as a message, `~/.claude/state/witness-sonar/hands/<session>/<hand>.json`. Nothing prunes old day folders yet. A hand that arrives as a file is never treated as typed by you: it only waits in the prompt box. Claude's writes into that folder (its file tools, and a shell command that writes) are refused in every session, so the heartbeats cannot be tampered with from inside Claude; reading them is allowed.
 
-**What it sends to a model:** the side passes are extract, match, candidates and barnacles. They run on Haiku at low effort. Each pass sees only what it is given: the prompt, with quoted and pasted text cut out, and short excerpts of answers and tool output. No other conversation content is sent. The only text witness adds to the main session's context is the one-line unproved-done note and the `/wrap` print.
+**What it sends to a model:** the side passes are extract, match, candidates and barnacles. They run on Haiku at low effort. Each pass sees only what it is given: the prompt, with quoted and pasted text cut out, and short excerpts of answers and tool output. No other conversation content is sent. The only text witness adds to the main session's context is the one-line unproved-done note, the `/wrap` print, and a hand from another session (submitted when you typed it there, otherwise left in the prompt box for you to send).
 
 ## Cost
 

@@ -6,7 +6,7 @@ export type Size = 'full' | 'compact'
 export type Mood = 'calm' | 'resting' | 'alert' | 'shielding' | 'doubtful' | 'proud'
 
 /** A prop Phi can hold or wear: a costume for a later organ (FAMILY.md, 2026-10-09). */
-export type Prop = 'razor' | 'compass' | 'horns'
+export type Prop = 'razor' | 'compass' | 'horns' | 'devil'
 /** What Phi wears now; set by the /wear command, `none` by default. */
 export type Costume = Prop | 'none'
 
@@ -171,6 +171,131 @@ export type Barnacle = {
   key: string
   text: string
   spoken: boolean
+  /** Epoch ms the person pressed Treat in /barnacles (1.2): the session may now propose a fix and, once it lands, take it off. */
+  treating?: number
+}
+
+/**
+ * A failing call's antigen (1.2, the repair pair): what failed and on what. `code` and `kind`
+ * are provisional cuts; `reason` keeps the raw first line so a later pass can re-cut them.
+ */
+export type Antigen = {
+  tool: string
+  /** SQLSTATE (`42703`) for a SQL failure, else an error class: refused, not-found, validation, http-<status>, timeout, string-not-found, other. */
+  code: string
+  /** The code read as a disease: undefined-column, undefined-table, syntax, unique-violation, ...; `code` itself when unknown. */
+  kind: string
+  /** The epitope's target: `schema.table.column` for an undefined column, a table, a file path, a bare 32-hex Notion id, else the tool name. */
+  target: string
+  /** The offending fragment (a column name, an id, a path), one line, at most 120 characters; '' when none. */
+  fragment: string
+  /** The error's first line as it came, one line, at most 160 characters. */
+  reason: string
+}
+
+/** A failure waiting for its cure: every attempt so far on one epitope (`code|target`). */
+export type OpenFailure = {
+  key: string
+  antigen: Antigen
+  /** Every target the failed call named, normalised; a later success naming any of them cures it. */
+  targets: string[]
+  attempts: number
+  /** Estimated tokens of every failed attempt: (input + result characters) / 4. */
+  cost: number
+  /** The last failed call's tool and input, one line, at most 300 characters. */
+  lastTool: string
+  lastInput: string
+  firstAt: number
+  lastAt: number
+  /** Main-session calls seen since the last attempt: the window closes at REPAIR_WINDOW_CALLS. */
+  since: number
+  /** The failed call set out to write: then only a call that writes cures it (a read is the investigation). */
+  write?: boolean
+  /** The last failed call's whole input line (up to 2000 characters), so a fix past `lastInput`'s 300 is still a diff. */
+  lastFull?: string
+  /**
+   * The input tokens the model was answered over when it made each failed attempt, summed: the
+   * context every retry re-reads (mostly cache reads), from `$.session.usage()`. Absent when the
+   * engine gave none. The bulk of what a misfire costs, which `cost` alone leaves out.
+   */
+  reread?: number
+}
+
+/** Where a cure differs from its failure: `content` (a hook), `route` (a skill line), `none` (weather). */
+export type RepairDiff = { where: 'content' | 'route' | 'none'; removed: string[]; added: string[] }
+
+/** A repair pair (1.2): a failed call and the call that cured it, with what the failing cost. */
+export type RepairPair = {
+  key: string
+  antigen: Antigen
+  failures: number
+  failedTool: string
+  failed: string
+  cureTool: string
+  cured: string
+  diff: RepairDiff
+  cost: number
+  firstAt: number
+  /** When cured: also the last time this cure was confirmed against the live system. */
+  at: number
+  /** A guard refused a call that then went through unchanged: an antibody fired on a healthy call. */
+  autoimmune: boolean
+  /** The context the failed attempts re-read, summed (OpenFailure.reread); absent when not measured. */
+  reread?: number
+}
+
+/** A pod's state on the sonar (1.2): a turn running, between turns, or gone. */
+export type PodState = 'working' | 'idle' | 'ended'
+
+/** A file a pod wrote, normalised as the ledger keeps it (lower-case, forward slashes). */
+export type PodWrite = { path: string; at: number }
+
+/** One running session's heartbeat file (the sonar, 1.2): `~/.claude/state/witness-sonar/<day>/<session>.json`. */
+export type Beat = {
+  format: 'witness-sonar'
+  version: 1
+  sessionId: string
+  /** The session's folder as `projectKey` gives it. */
+  repo: string
+  /** The git repository's root, normalised; null outside one. */
+  root: string | null
+  /** The folder's last segment, as written (`my_project`). */
+  name: string
+  startedAt: number
+  beatAt: number
+  state: PodState
+  /** Up to three of this watch's open asks or goals, one line each, at most 90 characters. */
+  goals: string[]
+  /** The asks count as the band shows it (`3/7 ~1`). */
+  asks: string
+  /** The newest file writes of this watch, at most 20, distinct paths. */
+  writes: PodWrite[]
+  /** The Notion pages written lately (bare 32-hex ids), at most 20; absent from an older beat (additive, version 1). */
+  notion?: PodWrite[]
+  /** The tables written lately by a direct statement (not a SELECT-led writer function), at most 20. */
+  tables?: PodWrite[]
+}
+
+/**
+ * What one overlap is (1.2, ruled 2026-10-09): `file`, `notion` or `table` when both pods wrote
+ * the same thing; `into-theirs` when this pod wrote inside another live pod's repository, and
+ * `into-mine` when another pod wrote inside this one's. Absent reads as `file`.
+ */
+export type OverlapKind = 'file' | 'notion' | 'table' | 'into-theirs' | 'into-mine'
+
+/** A thing this pod and another both touched recently, or a write into another live pod's repository. */
+export type Overlap = { path: string; peer: string; peerName: string; at: number; kind?: OverlapKind }
+
+/** A hand between pods (1.2). `typed`: the person typed it (/hand from the composer); else a Claude session wrote it. */
+export type Hand = { id: string; from: string; fromName: string; typed: boolean; text: string; at: number }
+
+/** What the sonar last heard: the live pods, the overlaps, and hands waiting for an empty prompt box. */
+export type SonarView = {
+  pods: Beat[]
+  overlaps: Overlap[]
+  waiting: Hand[]
+  /** Epoch ms of the last sweep; 0 never. */
+  at: number
 }
 
 /** Something the companion said in its bubble, kept for the print's "Notes taken" (S163). */
@@ -282,6 +407,10 @@ declare module 'claude-code' {
       usage: UsageRow[]
       /** The session log this watch is bound to (1.1); null until the main loop touches one. */
       log: LogBinding | null
+      /** This project's repair pairs (1.2), newest last, carried across sessions in $.store. */
+      repairs: RepairPair[]
+      /** The sonar (1.2): the other live pods, overlaps, and hands waiting for the prompt box. */
+      sonar: SonarView
     }
   }
 }

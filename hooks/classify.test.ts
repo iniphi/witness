@@ -431,6 +431,37 @@ test('an unbalanced substitution is an unknown write', () => {
   expect(bash('echo `rm x').writes).toContainEqual(other('other:shell'))
 })
 
+// F1 (2026-10-09, live): the sonar fence refused this read-only command as a write. Two words
+// it could not vouch for: `continue`, and `age=...` read as a command word once `do` was dropped.
+test('a read-only loop with continue and an assignment after do makes no write (F1)', () => {
+  const original =
+    'cd ~/.claude/state/witness-sonar 2>/dev/null && ls; d=$(date +%Y-%m-%d); echo "--- today $d ---"; ' +
+    'ls -la "$d" 2>/dev/null | tail -15; now=$(date +%s); for f in "$d"/*.json; do [ -f "$f" ] || continue; ' +
+    'age=$(( now - $(stat -c %Y "$f") )); echo "$(basename $f) age=${age}s"; done 2>/dev/null | sort -t= -k2 -n | head -10'
+  expect(bash(original).writes).toEqual([])
+  expect(bash('for f in a/*.json; do [ -f "$f" ] || continue; echo "$f"; done').writes).toEqual([])
+  expect(bash('while true; do break; done').writes).toEqual([])
+  expect(bash(':').writes).toEqual([])
+})
+
+test('an assignment after do, then or a brace is skipped like one at the head', () => {
+  expect(bash('for f in a b; do n=$(( 1 + 2 )); echo $n; done').writes).toEqual([])
+  expect(bash('if true; then X=1 cat a; fi').writes).toEqual([])
+  expect(bash('{ X=1; cat a; }').writes).toEqual([])
+  // What follows the assignment is still classified.
+  expect(bash('if true; then X=1 rm a; fi').writes).toEqual([fw('a')])
+  expect(bash('for f in a; do X=1 python x.py; done').writes).toEqual([other('other:shell')])
+  expect(bash(': > out.txt').writes).toEqual([fw('out.txt')])
+})
+
+// Found by F1's probe: `$((...))` was taken to run nothing, so a command inside it went unseen.
+test('a command substitution inside arithmetic runs as a command of its own', () => {
+  expect(bash('echo $(( $(rm x) + 1 ))').writes).toContainEqual(fw('x'))
+  expect(bash('echo $(( $(python a.py) ))').writes).toEqual([other('other:shell')])
+  expect(bash('echo $(( 5 - $(stat -c %Y a) ))').writes).toEqual([])
+  expect(bash('echo $(( $(rm x) + 1 )').writes).toContainEqual(other('other:shell'))
+})
+
 test('a redirect after echo is still a file write, and no other write', () => {
   expect(bash('echo hi > out.txt')).toEqual({ writes: [fw('out.txt')], reads: [] })
 })

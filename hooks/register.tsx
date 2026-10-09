@@ -5,17 +5,24 @@ import type {
   Activity,
   Ask,
   Barnacle,
+  Beat,
   BoardRow,
   Body,
   Candidate,
   Costume,
   Friction,
+  Hand,
   Heard,
   Hold,
   Ledger,
   LogBinding,
   NoticeQueue,
   Observed,
+  OpenFailure,
+  Overlap,
+  PodState,
+  RepairPair,
+  SonarView,
   Spoken,
   Ticket,
   UsagePass,
@@ -53,6 +60,8 @@ import {
   readConfig,
   rootFromModuleUrl,
   scriptCandidates,
+  sonarOn,
+  typedHandsStart,
   writerPattern,
 } from './config'
 import type { Adapters, Config } from './config'
@@ -76,6 +85,7 @@ import type { RecentCall } from './barnacles'
 import { parseCostume } from './sprites'
 import {
   CONFIRM_TOOL,
+  REPORT_TOOLS,
   confirmDescription,
   confirmSchema,
   confirmAsks,
@@ -103,7 +113,67 @@ import {
   parseCandidates,
   shouldScan,
 } from './notes'
-import { bandTree, barnaclesTree, beneathText, paneTree } from './render'
+import { asCarrySlot, carryPrefix, carrySlot, carrySlotKey, mergeCarried, takeable } from './carry'
+import {
+  archivable,
+  asFrictionList,
+  asFrictionSlot,
+  frictionPrefix,
+  frictionSlot,
+  frictionSlotKey,
+  mergeFriction,
+  ownFriction,
+} from './frictionslots'
+import { podsTree } from './pods'
+import { GUEST_MIN_BODY, GUEST_OWNER_PREFIX, bandTree, barnaclesTree, beneathText, paneTree, splitBeneath } from './render'
+import { addPairs, asPairs, pairCandidates, pairLine, pairsSection } from './immunity'
+import {
+  TREATED_DESCRIPTION,
+  TREATED_SCHEMA,
+  TREATED_TOOL,
+  isTreatPrompt,
+  markTreating,
+  parseTreated,
+  treatPrompt,
+  treatVerdict,
+  treatedText,
+} from './treat'
+import { age, cure, noteFailure } from './repair'
+import {
+  BEAT_MS,
+  HAND_TAG,
+  HAND_TEXT_MAX,
+  LIVE_MS,
+  beatDays,
+  beatFile,
+  beatPath,
+  findPod,
+  freshOverlaps,
+  handAction,
+  handEnvelope,
+  handFile,
+  handPath,
+  handPrompt,
+  handsDir,
+  isForgedHand,
+  isWitnessHand,
+  livePods,
+  makeBeat,
+  newcomers,
+  originLabel,
+  overlaps,
+  parseBeat,
+  parseHand,
+  parseHandArgs,
+  parseHandFile,
+  podLabel,
+  recentWrites,
+  sonarDir,
+  touchesSonar,
+  unreadHand,
+} from './sonar'
+import { bandPods, newcomerText, overlapText, podRows } from './podview'
+import { intrusions, recentTargets, storeOverlaps } from './territory'
 import { needsHold, withReturning } from './sql'
 import {
   HELPER_TIMEOUT_MS,
@@ -139,6 +209,24 @@ import { claimLabel, classify, developByAsks, recordAgentTurn, recordCall, recor
 
 const PANE = 'witness-undone'
 const BARNACLES_PANE = 'witness-barnacles'
+const PODS_PANE = 'witness-pods'
+// The model's own hand (1.2): it lands in the other pod's prompt box and waits for the person's Enter.
+const HAND_TOOL = 'mcp__witness__hand'
+const HAND_DESCRIPTION =
+  "Hand a piece of work to another live Claude Code session (a pod) on this machine. It lands in that session's prompt box and waits for the person to read it and press Enter; it never starts work there on its own. `to` is the pod's number, name or id prefix as /pods lists it."
+const HAND_SCHEMA = {
+  type: 'object',
+  properties: {
+    to: { type: 'string', description: "The pod: its number in /pods, its folder name, or the start of its session id." },
+    text: { type: 'string', description: 'What the other session should do, self-contained: it has none of this conversation.' },
+  },
+  required: ['to', 'text'],
+} as const
+const SUBAGENT_HAND = 'witness: a subagent may not hand work to another session; report to the main session instead.'
+const SONAR_FENCE =
+  "witness: the sonar's files (~/.claude/state/witness-sonar) are written by the witness alone, so a hand typed by the person can never be forged. Use the hand tool."
+const FORGED_HAND =
+  "witness: a hand envelope is the witness's own. Use the hand tool, or ask the person to type /hand."
 const SQL_TOOL = 'mcp__claude_ai_Supabase__execute_sql'
 const FRAME_MS = 1_500
 const FRAME_CYCLE = [0, 0, 0, 1, 0, 0, 2, 0]
@@ -190,6 +278,11 @@ const ticketAtom = atom({ plugin: 'witness', key: 'ticket' } as const, null as T
 const usageAtom = atom({ plugin: 'witness', key: 'usage' } as const, [] as UsageRow[])
 // The session log this watch follows (1.1): bound by the main loop's own file calls, kept across a hot reload.
 const logAtom = atom({ plugin: 'witness', key: 'log' } as const, null as LogBinding | null)
+// The repair pairs (1.2): this project's, newest last, kept across sessions in $.store.
+const repairsAtom = atom({ plugin: 'witness', key: 'repairs' } as const, [] as RepairPair[])
+// The sonar (1.2): the other live pods, the files this pod and one of them both wrote, waiting hands.
+const EMPTY_SONAR: SonarView = { pods: [], overlaps: [], waiting: [], at: 0 }
+const sonarAtom = atom({ plugin: 'witness', key: 'sonar' } as const, EMPTY_SONAR)
 
 // The session's plain values. The engine follows `$` only into functions declared at
 // the top of this file, so the helpers read this record rather than closures. It is
@@ -229,6 +322,31 @@ type Session = {
   adapters: Adapters
   /** Where usage files go; null (none written) when the home is unknown. */
   usageDir: string | null
+  /** Failures waiting for their cure (1.2): the main session's own, lost on a reload. */
+  opens: OpenFailure[]
+  /** The sonar's folder (1.2); null when the sonar is off or the home is unknown. */
+  sonarDir: string | null
+  /** The home folder, for the shared ~/.claude places an overlap may sit in. */
+  home: string | null
+  /** The git repository's root, as the engine reads it; null outside one. */
+  root: string | null
+  /** This pod's state on the sonar: a main turn running, or between turns. */
+  podState: PodState
+  /** Pods in this repo already announced, and the overlaps already said: each said once. */
+  noticedPods: string[]
+  podOverlaps: Overlap[]
+  /** Hands already taken (by message or by file): each taken once. */
+  handsSeen: string[]
+  /** A sonar sweep is running; the tick must not start a second. */
+  sweeping: boolean
+  /**
+   * The sonar folder the fence keeps Claude's writes out of, in EVERY session with a known home,
+   * the sonar on or off, headless included (the blind verifier's blocker, S170): a session with
+   * its own sonar off could otherwise write a hand file for a pod whose sonar is on.
+   */
+  fenceDir: string | null
+  /** The pods as last shown in the Pods pane, by session id: a /hand row number means these. */
+  podsShown: string[]
 }
 
 let s: Session = {
@@ -253,6 +371,17 @@ let s: Session = {
   writers: writerPattern(readConfig({}).writers),
   adapters: NO_ADAPTERS,
   usageDir: null,
+  opens: [],
+  sonarDir: null,
+  home: null,
+  root: null,
+  podState: 'idle',
+  noticedPods: [],
+  podOverlaps: [],
+  handsSeen: [],
+  sweeping: false,
+  fenceDir: null,
+  podsShown: [],
 }
 
 function setSession(patch: Partial<Session>): void {
@@ -500,26 +629,90 @@ async function developFromAsks($: any): Promise<void> {
   await update($, asksAtom, a => resolveStates(a, ledger))
 }
 
-async function saveCarry($: any): Promise<void> {
-  await $.store.set(storeKeys(s.key).carry, carryOver(await read($, asksAtom)))
+/** This session's own name in the store: its id, else its start time. */
+function selfId(): string {
+  return s.sessionId !== '' ? s.sessionId : `session-${s.startedAt}`
 }
 
+/**
+ * This session's leftovers into its OWN slot (1.2, ruled 2026-10-09): a live session's slot is
+ * never taken by another, and `ended` (written at session end) is what makes it takeable.
+ */
+async function saveCarry($: any, ended = false): Promise<void> {
+  const slot = carrySlot({ sessionId: selfId(), savedAt: await $.clock.now(), ended, asks: carryOver(await read($, asksAtom)) })
+  await $.store.set(carrySlotKey(s.key, selfId()), slot)
+}
+
+/**
+ * The leftovers of sessions in this project that have ended (or gone stale), each slot taken
+ * once and deleted; the older single slot, if one is still stored, read the same way.
+ */
+async function takeCarried($: any, now: number): Promise<Ask[]> {
+  const lists: Ask[][] = []
+  const all: string[] = await $.store.keys().catch(() => [])
+  for (const k of all.filter(x => x.startsWith(carryPrefix(s.key)))) {
+    const slot = asCarrySlot(await $.store.get(k))
+    if (slot === null || !takeable(slot, now, selfId())) continue
+    lists.push(slot.asks)
+    await $.store.delete(k).catch(() => undefined)
+  }
+  const legacy = await $.store.get(storeKeys(s.key).carry)
+  if (Array.isArray(legacy)) {
+    lists.push(legacy as Ask[])
+    await $.store.delete(storeKeys(s.key).carry).catch(() => undefined)
+  }
+  return mergeCarried(lists)
+}
+
+/** This session's OWN friction into its own slot (1.2, ruled 2026-10-09): never over another pod's. */
 async function saveFriction($: any): Promise<void> {
-  await $.store.set(storeKeys(s.key).friction, s.friction)
+  const slot = frictionSlot({ sessionId: selfId(), savedAt: await $.clock.now(), entries: ownFriction(s.friction, s.startedAt) })
+  await $.store.set(frictionSlotKey(s.key, selfId()), slot)
+}
+
+/**
+ * The project's friction as every pod wrote it: the archive (the old single key) and every
+ * session's slot, live or ended, merged. Slots untouched for a day are folded into the archive
+ * and deleted, so the store stays bounded.
+ */
+async function loadFriction($: any, now: number): Promise<Friction[]> {
+  const archiveKey = storeKeys(s.key).friction
+  const archive = asFrictionList(await $.store.get(archiveKey))
+  const lists: Friction[][] = [archive]
+  const folded: Friction[][] = []
+  const gone: string[] = []
+  const all: string[] = await $.store.keys().catch(() => [])
+  for (const k of all.filter(x => x.startsWith(frictionPrefix(s.key)))) {
+    const slot = asFrictionSlot(await $.store.get(k))
+    if (slot === null) continue
+    lists.push(slot.entries)
+    if (archivable(slot, now, selfId())) {
+      folded.push(slot.entries)
+      gone.push(k)
+    }
+  }
+  if (gone.length > 0) {
+    await $.store.set(archiveKey, mergeFriction([archive, ...folded]))
+    for (const k of gone) await $.store.delete(k).catch(() => undefined)
+  }
+  return mergeFriction(lists)
 }
 
 async function loadStored($: any, now: number): Promise<void> {
   const keys = storeKeys(s.key)
-  const carried = await $.store.get(keys.carry)
-  if (Array.isArray(carried) && carried.length > 0) {
-    const seeded = seedCarried(carried as Ask[], { at: now, ids: newIds(now, carried.length, 'k') })
+  // Only ended sessions' leftovers (1.2): a live session's undone asks stay its own.
+  const carried = await takeCarried($, now)
+  if (carried.length > 0) {
+    const seeded = seedCarried(carried, { at: now, ids: newIds(now, carried.length, 'k') })
     await update($, asksAtom, a => (a.length === 0 ? seeded : a))
   }
-  const log = await $.store.get(keys.friction)
-  // Legacy third-edit entries are dropped: a file under build is work, not friction (1.1).
-  setSession({ friction: realFriction(Array.isArray(log) ? (log as Friction[]) : []) })
+  // Every pod's friction, read; this session writes only its own (1.2). Legacy third-edit
+  // entries are dropped: a file under build is work, not friction (1.1).
+  setSession({ friction: realFriction(await loadFriction($, now)) })
   const stored = await $.store.get(keys.candidates)
   if (Array.isArray(stored)) await update($, candidatesAtom, () => stored as Candidate[])
+  const pairs = asPairs(await $.store.get(keys.repairs))
+  if (pairs.length > 0) await update($, repairsAtom, () => pairs)
 }
 
 /**
@@ -608,6 +801,54 @@ async function scrubBarnacles($: any, key: string | null): Promise<void> {
 }
 
 /**
+ * Treat (1.2, ruled 2026-10-09): the barnacle's evidence goes into the prompt box for the session
+ * to propose a fix, as /tackle does, never over a draft; the barnacle is marked in treatment so
+ * the `treated` tool may take it off once the fix lands. On demand only, no model call here.
+ */
+async function treatBarnacle($: any, key: string): Promise<string> {
+  const list: Barnacle[] = await read($, barnaclesAtom)
+  const barnacle = list.find(b => b.key === key)
+  if (barnacle === undefined) return 'That barnacle is no longer on the shell.'
+  const box: any = await $.prompt.read().catch(() => ({ text: '' }))
+  if (typeof box?.text === 'string' && box.text.trim() !== '') return 'Your prompt box holds a draft; clear it, then press Treat again.'
+  const pairs: RepairPair[] = await read($, repairsAtom)
+  const candidates: Candidate[] = await read($, candidatesAtom)
+  const text = treatPrompt({ barnacle, friction: s.friction, pairs, candidates })
+  const filled: any = await $.prompt.fill({ text, mode: 'replace' }).catch(() => null)
+  if (filled === null || filled?.isFilled === false) return 'The prompt box would not take the treatment.'
+  const now = await $.clock.now()
+  const next = markTreating(list, key, now)
+  await update($, barnaclesAtom, () => next)
+  await $.store.set(storeKeys(s.key).barnacles, next)
+  return 'The treatment is in your prompt box: send it, and the session proposes a fix for you to accept or reject.'
+}
+
+/**
+ * The `treated` tool: the session says the accepted fix has landed. Believed only for a barnacle
+ * the person put in treatment, and only once something was written since; then the barnacle comes
+ * off with the fix kept on its scrub record, so a regrowth says the fix did not hold.
+ */
+async function treated($: any, input: unknown): Promise<string> {
+  const asked = parseTreated(input)
+  if (asked === null) return 'Pass { key, fix }: the barnacle key from the treat prompt and one line saying what the fix was.'
+  const list: Barnacle[] = await read($, barnaclesAtom)
+  const barnacle = list.find(b => b.key === asked.key)
+  const ledger: Ledger = await read($, ledgerAtom)
+  const since = barnacle?.treating ?? Number.POSITIVE_INFINITY
+  const verdict = treatVerdict(barnacle, ledger.writes.filter(w => w.at > since).length)
+  if (!verdict.ok || barnacle === undefined) return `witness: not taken off. ${verdict.ok ? '' : verdict.reason}`
+  const now = await $.clock.now()
+  const keys = storeKeys(s.key)
+  const next = scrub(list, asked.key)
+  await update($, barnaclesAtom, () => next)
+  await $.store.set(keys.barnacles, next)
+  const scrubbed = asScrubbed(await $.store.get(keys.scrubbed))
+  await $.store.set(keys.scrubbed, { ...scrubbed, [asked.key]: { at: now, text: treatedText(barnacle, asked.fix) } })
+  await say($, 'TREATED', `${asked.key}: ${asked.fix}`, false, now + SPEAK_MS)
+  return `Treated: the barnacle ${asked.key} is off the shell. If its friction comes back it regrows at once and says this fix did not hold.`
+}
+
+/**
  * A scrubbed barnacle regrows the moment its friction is recorded again (Bradley, 2026-10-09:
  * the scrub "hasn't worked properly" if it comes back, so say so): back on the shell with its
  * old words, unspoken, its scrub lifted so the recurrence pass sees the whole history again.
@@ -628,6 +869,56 @@ async function regrowBarnacles($: any, found: readonly Friction[]): Promise<void
   await $.store.set(keys.scrubbed, back.reduce((acc, b) => unscrub(acc, b.key), scrubbed))
 }
 
+/**
+ * The repair pair (1.2, Bradley 2026-10-09): a main-session call that failed opens an antigen
+ * on its target; the next call that succeeds on that target is its cure, and the two are kept
+ * as one pair with the diff between them and what the failing cost. A sub-agent's calls are
+ * its own, as for friction.
+ */
+async function recordRepair(
+  $: any,
+  c: { tool: string; input: unknown; resultText: string; isError: boolean; at: number },
+): Promise<void> {
+  // What the model re-read to make a failed attempt: the bulk of a retry's cost (the plain call
+  // costs nothing). Read before s.opens is, so no await falls between its read and its write:
+  // parallel calls record concurrently and would otherwise lose each other's failures.
+  const usage: any = c.isError ? await $.session.usage().catch(() => null) : null
+  const context = typeof usage?.context?.tokens === 'number' ? usage.context.tokens : undefined
+  const aged = age(s.opens, c.at)
+  if (c.isError) {
+    setSession({ opens: noteFailure(aged, { tool: c.tool, input: c.input, resultText: c.resultText, at: c.at, writers: s.writers, context }) })
+    return
+  }
+  const r = cure(aged, { tool: c.tool, input: c.input, at: c.at, writers: s.writers })
+  setSession({ opens: r.opens })
+  if (r.pairs.length === 0) return
+  // One store write at a time: two parallel cures would otherwise each overwrite the other's pair.
+  const kept = pairWrites.then(() => keepPairs($, r.pairs, c.at))
+  pairWrites = kept.catch(() => undefined)
+  await kept
+}
+
+/** The tail of the pair writes, so keepPairs runs one at a time (lost on a reload, as nothing needs it). */
+let pairWrites: Promise<void> = Promise.resolve()
+
+/**
+ * Keeps new pairs for the project, read fresh from the store so a second pod's are not lost.
+ * An epitope that recurs (immune memory) becomes a hook or skill candidate at once, with no
+ * side pass: the pair carries its own cure.
+ */
+async function keepPairs($: any, fresh: readonly RepairPair[], at: number): Promise<void> {
+  const keys = storeKeys(s.key)
+  const next = addPairs(asPairs(await $.store.get(keys.repairs)), fresh)
+  await $.store.set(keys.repairs, next)
+  await update($, repairsAtom, () => next)
+  const existing: Candidate[] = await read($, candidatesAtom)
+  const minted = pairCandidates(next, existing, at)
+  if (minted.length === 0) return
+  const merged = mergeCandidates(existing, minted)
+  await update($, candidatesAtom, () => merged)
+  await $.store.set(keys.candidates, merged)
+}
+
 /** End of watch: the print into the open session log, the undone carried forward. */
 /** What a print came to: the line said to Bradley, the print itself, and where it was written. */
 type Printed = { summary: string; print: string; path: string | null }
@@ -646,8 +937,11 @@ async function writePrint($: any): Promise<Printed> {
   await scanCandidates($, now, true).catch(() => undefined)
   const spoken: Spoken[] = await read($, spokenAtom)
   const candidates: Candidate[] = await read($, candidatesAtom)
+  const repairs: RepairPair[] = await read($, repairsAtom)
   const extra = [
     ...notesSection({ friction: s.friction, spoken, since: s.startedAt }),
+    '',
+    ...pairsSection(repairs, s.startedAt),
     '',
     ...candidatesSection(candidates, s.startedAt),
   ]
@@ -764,6 +1058,227 @@ async function poll($: any): Promise<void> {
   await say($, 'BOARD', `from ${first.from}: ${first.subject}`, false, now + 120_000)
 }
 
+// ---- the sonar (1.2): heartbeats, overlaps and hands between pods ----
+
+/** This pod's name as another pod sees it: the folder, and the start of the session id. */
+function selfLabel(): string {
+  const name = s.cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? s.cwd
+  return `${name} ${s.sessionId.slice(0, 4)}`
+}
+
+/** Writes this pod's heartbeat: its state, what it is on, and the files it wrote lately. */
+async function writeBeat($: any, now: number): Promise<void> {
+  if (s.sonarDir === null || s.sessionId === '') return
+  const asks: Ask[] = await read($, asksAtom)
+  const ledger: Ledger = await read($, ledgerAtom)
+  const beat = makeBeat({
+    sessionId: s.sessionId,
+    cwd: s.cwd,
+    root: s.root,
+    startedAt: s.startedAt,
+    now,
+    state: s.podState,
+    // This watch's own asks: a carried one is the previous session's (seen live, S170: a new pod
+    // showed another pod's goal because the project's carry is written after every turn).
+    goals: undone(asks)
+      .filter(a => a.source !== 'carried')
+      .map(a => a.text),
+    asks: nm(asks),
+    writes: recentWrites(ledger.writes, now),
+    notion: recentTargets(ledger.writes, now, 'notion'),
+    tables: recentTargets(ledger.writes, now, 'sql'),
+  })
+  await $.fs.write(beatPath(s.sonarDir, now, s.sessionId), beatFile(beat))
+}
+
+/** Every heartbeat written lately, today's and yesterday's folders; a stale or unreadable file is skipped. */
+async function readBeats($: any, now: number): Promise<Beat[]> {
+  const out: Beat[] = []
+  for (const day of beatDays(now)) {
+    const dir = `${s.sonarDir}/${day}`
+    const entries: any[] = await $.fs.list(dir).catch(() => [])
+    for (const entry of entries) {
+      if (entry?.kind !== 'file' || !String(entry.name).endsWith('.json')) continue
+      if (entry.mtimeMs > 0 && now - entry.mtimeMs > LIVE_MS) continue
+      const text: string | null = await $.fs.read(`${dir}/${entry.name}`).catch(() => null)
+      const beat = text === null ? null : parseBeat(text)
+      if (beat !== null) out.push(beat)
+    }
+  }
+  return out
+}
+
+/**
+ * One sweep: beat, listen, and say what is new. A pod that arrives in this repo is said once;
+ * a file this pod and another both wrote, in a place they share, is said once per pod.
+ */
+async function sonarTick($: any): Promise<void> {
+  if (s.sonarDir === null || s.sweeping) return
+  setSession({ sweeping: true })
+  try {
+    const now = await $.clock.now()
+    await writeBeat($, now)
+    const pods = livePods(await readBeats($, now), { now, self: s.sessionId })
+    const ledger: Ledger = await read($, ledgerAtom)
+    const mine = recentWrites(ledger.writes, now)
+    // The same file, the same Notion page or table, and a write inside another live pod's
+    // repository, of which both pods are told (the wider pings, ruled 2026-10-09).
+    const found = [
+      ...overlaps({ mine, myRoot: s.root, pods, home: s.home, now }),
+      ...storeOverlaps({ notion: recentTargets(ledger.writes, now, 'notion'), tables: recentTargets(ledger.writes, now, 'sql'), pods, now }),
+      ...intrusions({ mine, myRoot: s.root, pods, now }),
+    ]
+    const fresh = freshOverlaps(s.podOverlaps, found)
+    const arrived = newcomers(s.noticedPods, pods, s.key)
+    setSession({ podOverlaps: found, noticedPods: [...s.noticedPods, ...arrived.map(p => p.sessionId)] })
+    await update($, sonarAtom, v => ({ ...v, pods, overlaps: found, at: now }))
+    for (const pod of arrived) await say($, 'SONAR', newcomerText(pod), false, now + SPEAK_MS)
+    if (fresh.length > 0) {
+      $.ui.toast(`Overlap: ${overlapText(fresh[0]!)}`)
+      await say($, 'OVERLAP', fresh.map(overlapText).join('; '), false, now + SPEAK_MS)
+    }
+    await takeHandFiles($)
+    await fillWaiting($, null)
+  } finally {
+    setSession({ sweeping: false })
+  }
+}
+
+/**
+ * The pod a /hand names. A row number means the pods as the person last saw them in the Pods
+ * pane, never a list re-sorted since (the verifier: a pod arriving between /pods and /hand 2
+ * would have taken a typed hand meant for another). A name or id prefix is read against the
+ * live list.
+ */
+function resolvePod(pods: readonly Beat[], ref: string): Beat | 'ambiguous' | 'unseen' | 'gone' | null {
+  const r = ref.trim()
+  if (!/^\d{1,2}$/.test(r)) return findPod(pods, r)
+  if (s.podsShown.length === 0) return 'unseen'
+  const id = s.podsShown[Number(r) - 1]
+  if (id === undefined) return null
+  return pods.find(p => p.sessionId === id) ?? 'gone'
+}
+
+/** Sends a hand to a live pod: by message, else as a file that pod reads on its next sweep. */
+async function sendHand($: any, ref: string, text: string, typed: boolean): Promise<string> {
+  if (s.sonarDir === null) return 'The sonar is off in this session, so no pod can be handed work.'
+  const pods: Beat[] = (await read($, sonarAtom)).pods
+  const pod = resolvePod(pods, ref)
+  if (pod === null) return `No live pod matches "${ref}". /pods lists them.`
+  if (pod === 'ambiguous') return `"${ref}" matches more than one pod; use its number from /pods.`
+  if (pod === 'unseen') return 'Open /pods first: a pod number means the list you last saw there.'
+  if (pod === 'gone') return `Pod ${ref} in the list you last saw is no longer live; open /pods again.`
+  const now = await $.clock.now()
+  const id = newIds(now, 1, 'h')[0] ?? `h${now}`
+  const hand: Hand = { id, from: s.sessionId, fromName: selfLabel(), typed, text, at: now }
+  const cut = text.trim().length > HAND_TEXT_MAX ? ` Only its first ${HAND_TEXT_MAX} characters went.` : ''
+  const sent: any = await $.session
+    .send({ to: { sessionId: pod.sessionId }, text: handEnvelope(hand) })
+    .catch((err: any) => ({ isDelivered: false, reason: String(err?.message ?? err) }))
+  const where = typed ? 'typed by you, so it starts there once that pod is idle' : "it waits in that pod's prompt box for an Enter"
+  if (sent?.isDelivered === true) return `Hand ${id} delivered to ${podLabel(pod)}: ${where}.${cut}`
+  await $.fs.write(handPath(s.sonarDir, pod.sessionId, id), handFile(hand, pod.sessionId, false))
+  // A file is never trusted as typed (anyone on the machine can write one), so it only fills the box.
+  return `Not delivered as a message (${sent?.reason ?? 'no reason given'}); left as a file ${podLabel(pod)} takes on its next sweep (within ${BEAT_MS / 1000} s). A hand left as a file never starts work on its own: it waits in that pod's prompt box for an Enter.${cut}`
+}
+
+/**
+ * A hand arrives (1.2, rulings S165). One the person typed starts a turn here unattended, once
+ * this pod is idle, and its words are asks here as they were there; one a Claude session wrote
+ * goes into the prompt box and waits for the person's Enter, never over a draft.
+ */
+async function takeHand($: any, hand: Hand): Promise<void> {
+  if (s.handsSeen.includes(hand.id) || hand.from === s.sessionId) return
+  setSession({ handsSeen: [...s.handsSeen, hand.id] })
+  const now = await $.clock.now()
+  const box: any = await $.prompt.read().catch(() => ({ text: '' }))
+  const boxEmpty = typeof box?.text !== 'string' || box.text.trim() === ''
+  const typedStarts = typedHandsStart(s.config.typedHands, estate())
+  const action = handAction({ typed: hand.typed, interactive: s.interactive, boxEmpty, typedStarts })
+  const first = hand.text.split('\n')[0] ?? ''
+  const said = `from ${hand.fromName}${hand.typed ? ' (typed)' : ' (from Claude)'}: ${first}`
+  if (action === 'submit') {
+    $.clock.after(0, () => extractAsks($, hand.text, now, ''))
+    $.clock.after(0, () => $.prompt.submit({ text: handPrompt(hand, s.config.person) }).catch(() => undefined))
+    await say($, 'HAND', said, false, now + SPEAK_MS)
+    return
+  }
+  // The fill goes in before anything else is awaited, and appends: a key typed since the read is kept.
+  const filled: any =
+    action === 'fill' ? await $.prompt.fill({ text: handPrompt(hand, s.config.person), mode: 'append' }).catch(() => null) : null
+  if (filled === null || filled?.isFilled === false) await update($, sonarAtom, v => ({ ...v, waiting: [...v.waiting, hand] }))
+  await say($, 'HAND', said, false, now + SPEAK_MS)
+}
+
+/** Puts a waiting hand (the first, or `id`) in the prompt box once the box is empty. */
+async function fillWaiting($: any, id: string | null): Promise<string> {
+  const waiting: Hand[] = (await read($, sonarAtom)).waiting
+  const hand = id === null ? waiting[0] : waiting.find(h => h.id === id)
+  if (hand === undefined) return 'No hand is waiting.'
+  const box: any = await $.prompt.read().catch(() => ({ text: '' }))
+  if (typeof box?.text === 'string' && box.text.trim() !== '') return 'Your prompt box holds a draft; clear it and the hand goes in.'
+  const filled: any = await $.prompt.fill({ text: handPrompt(hand, s.config.person), mode: 'append' }).catch(() => null)
+  if (filled === null || filled?.isFilled === false) return 'The prompt box would not take the hand.'
+  await update($, sonarAtom, v => ({ ...v, waiting: v.waiting.filter(h => h.id !== hand.id) }))
+  return `The hand from ${hand.fromName} is in your prompt box: read it, then press Enter.`
+}
+
+/** The file fallback: hands left for this pod when a message could not be delivered. */
+async function takeHandFiles($: any): Promise<void> {
+  if (s.sonarDir === null || s.sessionId === '') return
+  const dir = handsDir(s.sonarDir, s.sessionId)
+  const now = await $.clock.now()
+  const entries: any[] = await $.fs.list(dir).catch(() => [])
+  for (const entry of entries) {
+    if (entry?.kind !== 'file' || !String(entry.name).endsWith('.json')) continue
+    const path = `${dir}/${entry.name}`
+    const text: string | null = await $.fs.read(path).catch(() => null)
+    const got = text === null ? null : parseHandFile(text)
+    if (got === null || got.taken || got.to !== s.sessionId) continue
+    await $.fs.write(path, handFile(got.hand, got.to, true))
+    // Stale (a session id resumed hours later): marked taken, never acted on.
+    if (now - got.hand.at > HAND_FILE_MAX_MS) continue
+    // Never typed: a file can be written by anything on the machine, so it only fills the box
+    // and waits for the person's Enter (the blind verifier's blocker, S170).
+    await takeHand($, { ...got.hand, typed: false })
+  }
+}
+
+/** How long a hand left as a file stays worth taking. */
+const HAND_FILE_MAX_MS = 10 * 60_000
+
+/**
+ * Whether a call that names the sonar folder writes there. A file tool always does. A shell
+ * command (Bash, PowerShell, Monitor) does when the ledger's own reading of it finds a write or a
+ * command word it cannot vouch for (`other:shell`); `ls` or `cat` of a beat does not. A tripwire,
+ * not a proof: a hand left as a file is never trusted as typed, so this guards tampering only.
+ */
+function fencedWrite(e: any): boolean {
+  if (e.tool !== 'Bash' && e.tool !== 'PowerShell' && e.tool !== 'Monitor') return true
+  const tool = e.tool === 'Monitor' ? 'Bash' : e.tool
+  const input = { command: String(e.command ?? '') }
+  const { writes } = classify({ tool, input, resultText: '', isError: false, isReadOnly: false, writers: s.writers })
+  // Only a write INTO the folder, or a command word nobody can vouch for: `2>/dev/null` on a read
+  // is not one (the Ammonite pod's field report, S170: two read-only commands were refused).
+  return writes.some(w => w.kind === 'other' || w.target.toLowerCase().includes('witness-sonar'))
+}
+
+/** After a /clear: this pod beats under the new session id, idle, with nothing heard yet (F2). */
+async function followClear($: any): Promise<void> {
+  const id: unknown = await $.session.id().catch(() => s.sessionId)
+  if (typeof id !== 'string' || id === '' || id === s.sessionId) return
+  const now = await $.clock.now()
+  setSession({ sessionId: id, startedAt: now, podState: 'idle', noticedPods: [], podOverlaps: [], podsShown: [] })
+  await writeBeat($, now)
+}
+
+/** A main turn starting or ending moves this pod's state, said on the sonar at once. */
+async function podTo($: any, state: PodState): Promise<void> {
+  if (s.sonarDir === null || s.podState === state) return
+  setSession({ podState: state })
+  await writeBeat($, await $.clock.now()).catch(() => undefined)
+}
+
 async function housekeep($: any): Promise<void> {
   const now = await $.clock.now()
   await syncGoals($, now).catch(() => undefined)
@@ -866,6 +1381,8 @@ async function recordRun($: any, e: any, ran: any): Promise<void> {
       recent: [...s.recent, { tool, input, isError, at: now }].slice(-RECENT_CAP),
     })
     await regrowBarnacles($, found)
+    // A report tool's result is a sub-agent's word, never a cure or an antigen of its own.
+    if (!REPORT_TOOLS.has(tool)) await recordRepair($, { tool, input, resultText, isError, at: now })
   }
   await update($, activityAtom, a => touch(a, now))
   // The watch follows the log the main loop itself writes, edits or reads (1.1); an agent's binds nothing.
@@ -922,7 +1439,7 @@ async function afterAgentReport($: any, claimId: string, answer: string): Promis
 /** A slash command's arguments can carry an ask (`/task fix the walker`); the command name cannot. */
 function askableText(text: string): string {
   const t = text.trim()
-  if (isTacklePrompt(t) || isWrapReadPrompt(t)) return ''
+  if (isTacklePrompt(t) || isWrapReadPrompt(t) || isTreatPrompt(t)) return ''
   // What he quoted or pasted is not what he asked (seen live, S166).
   if (!t.startsWith('/')) return withoutQuoted(t).trim()
   const rest = withoutQuoted(t.replace(/^\/\S+\s*/, '')).trim()
@@ -952,7 +1469,20 @@ export const register: Register = (on, options) => {
     // The estate adapters (1.0): each off when its script is absent.
     const root = pluginRoot($)
     const adapters = await findAdapters($, e.cwd, root)
-    setSession({ adapters, usageDir: usageDir(await homeDir($)) })
+    const home = await homeDir($)
+    // The fence is armed in every session, before the interactive check (1.2, the verifier's blocker);
+    // the pod's own sonar state starts over on a second start in one process (/clear).
+    setSession({
+      adapters,
+      usageDir: usageDir(home),
+      fenceDir: sonarDir(home),
+      sonarDir: null,
+      home: home ?? null,
+      podState: 'idle',
+      noticedPods: [],
+      podOverlaps: [],
+      podsShown: [],
+    })
     // With nothing to look from, the band says `estate: ?` rather than drawing the companion's
     // own counts as if there were no estate (1.1): a lookup that could not run is not an absence.
     if (adapters.ticket === null && s.config.ticketScript === '' && root === '') {
@@ -978,8 +1508,23 @@ export const register: Register = (on, options) => {
     await $.tool
       .register({ name: 'confirm', description: confirmDescription(person), inputSchema: confirmSchema(person) })
       .catch(() => undefined)
+    // Treat (1.2): the session reports an accepted fix has landed; the witness checks before it believes.
+    await $.tool.register({ name: 'treated', description: TREATED_DESCRIPTION, inputSchema: TREATED_SCHEMA }).catch(() => undefined)
     await loadStored($, now)
     if (!e.isInteractive) return next(e)
+    // The sonar (1.2): where the estate is, unless set on or off; a headless run never beats.
+    if (sonarOn(s.config.sonar, estate()) && s.sessionId !== '') {
+      const repo: any = await $.session.repo().catch(() => null)
+      setSession({ sonarDir: s.fenceDir, root: typeof repo?.root === 'string' ? repo.root : null })
+    }
+    if (s.sonarDir !== null) {
+      await $.command.register({ name: 'pods', description: 'Witness: the other live sessions on the sonar, and the files you both wrote' })
+      await $.command.register({ name: 'hand', description: 'Witness: hand work to another live session - /hand <number|name> <what to do>' })
+      await $.tool.register({ name: 'hand', description: HAND_DESCRIPTION, inputSchema: HAND_SCHEMA }).catch(() => undefined)
+      // A sweep that cannot read or write the folder costs that sweep, never the session.
+      $.clock.after(0, () => sonarTick($).catch(() => undefined))
+      $.clock.every(BEAT_MS, () => sonarTick($).catch(() => undefined))
+    }
     const settings: any = await $.settings.read()
     if (estate()) {
       $.clock.after(0, () => refreshTicket($))
@@ -1025,6 +1570,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await update($, turnAtom, () => e.turnId)
+    await podTo($, 'working')
     return next(e)
   })
 
@@ -1034,6 +1580,24 @@ export const register: Register = (on, options) => {
       if (e.agentId !== undefined) return { deny: SUBAGENT_CONFIRM }
       const { tool: _t, tool_use_id: _u, agentId: _a, ...input } = e
       return { result: await confirm($, input) }
+    }
+    if (e.tool === TREATED_TOOL) {
+      if (e.agentId !== undefined) return { deny: 'witness: a subagent may not take a barnacle off; the main session reports a treated fix.' }
+      const { tool: _t, tool_use_id: _u, agentId: _a, ...input } = e
+      return { result: await treated($, input) }
+    }
+    if (e.tool === HAND_TOOL) {
+      if (e.agentId !== undefined) return { deny: SUBAGENT_HAND }
+      // Claude's own hand is never typed: it waits for the person's Enter over there (1.2).
+      return { result: await sendHand($, String(e.to ?? ''), String(e.text ?? ''), false) }
+    }
+    // The sonar's files are the witness's alone (1.2), fenced in every session: a file tool there is
+    // refused, and a shell command only when it writes (reading a beat to look is fine).
+    if (s.fenceDir !== null && touchesSonar(e.tool, e, s.fenceDir) && fencedWrite(e)) {
+      try {
+        await recordRun($, e, { deny: SONAR_FENCE })
+      } catch {}
+      return { deny: SONAR_FENCE }
     }
     let call = e
     if (isHeldSql(e)) {
@@ -1073,6 +1637,7 @@ export const register: Register = (on, options) => {
       return done
     }
     setSession({ lastAnswer: String(e.answer ?? '').slice(-MAX_PREVIOUS_CHARS) })
+    await podTo($, 'idle')
     const cid = newIds(now, 1, 'c')[0] ?? `c${now}`
     let claimId: string | null = null
     await update($, ledgerAtom, l => {
@@ -1090,9 +1655,68 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await saveCarry($)
-    await saveFriction($)
+    // Marked ended: only now may a later session in this project take these leftovers. The three
+    // start together (F2, 2026-10-09): the end chain shares one short wall-clock bound, and a save
+    // that failed kept the ended beat from ever being written.
+    await Promise.allSettled([saveCarry($, true), saveFriction($), podTo($, 'ended')])
+    const done = await next(e)
+    // A /clear ends the conversation, not the process, and no session.start follows (engine
+    // types, SessionEndInput): the pod follows the new id itself, or its next turn beats as the
+    // old session, `working` again, and a hand sent to it by id goes nowhere.
+    if (e.reason === 'clear') await followClear($).catch(() => undefined)
+    return done
+  })
+
+  // A hand from another pod's witness (1.2): taken here, never read by the model as a message.
+  // F8 (2026-10-09, live): a hand the parser could not read went on to the model, read mid-turn
+  // with no Enter. Fail closed: anything with a witness stamp or the hand tag is taken, and what
+  // cannot be read as a witness hand waits in the box as raw text, never typed.
+  on('session.receive', async ($, e: any, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const text = String(e.text ?? '')
+    const witness = isWitnessHand(e.origin)
+    if (!witness && !text.includes(HAND_TAG)) return next(e)
+    const now = await $.clock.now()
+    const hand = (witness ? parseHand(text, now) : null) ?? unreadHand(text, originLabel(e.origin), now)
+    await takeHand($, hand)
+    return { consumed: `witness hand ${hand.id} from ${hand.fromName}` }
+  })
+
+  // The model's own SendMessage may never carry a witness hand's envelope (1.2).
+  on('session.send', async ($, e: any, next) => {
+    if (isForgedHand({ originKind: String(e.origin?.kind ?? ''), text: String(e.text ?? '') })) {
+      return { isDelivered: false, reason: FORGED_HAND }
+    }
     return next(e)
+  })
+
+  // /pods: the other live sessions, what each is on, and the files you both wrote (1.2).
+  on('command.run', { command: 'pods' }, async $ => {
+    if (s.sonarDir === null) return { text: 'The sonar is off in this session.' }
+    const view: SonarView = await read($, sonarAtom)
+    // A /hand row number means this list, as the person saw it.
+    setSession({ podsShown: view.pods.map(p => p.sessionId) })
+    await $.ui.open({ id: PODS_PANE, title: 'Pods' })
+    const n = view.pods.length
+    const o = view.overlaps.length
+    return { text: `${n} other live pod${n === 1 ? '' : 's'}${o > 0 ? `, ${o} overlap${o === 1 ? '' : 's'}` : ''} - the list is open in the Pods pane.` }
+  })
+
+  // /hand <pod> <text>: typed by the person (the composer or the bridge), it may start an idle pod's turn.
+  on('command.run', { command: 'hand' }, async ($, e) => {
+    const parsed = parseHandArgs(e.args)
+    if (parsed === null) return { text: 'Usage: /hand <pod number|name|id> <what to do> (/pods lists the pods)' }
+    const typed = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    return { text: await sendHand($, parsed.ref, parsed.text, typed) }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PODS_PANE }, async ($, e) => {
+    const view: SonarView = await read($, sonarAtom)
+    const now = await $.clock.now()
+    // The pane redraws as the sonar sweeps; the numbers on screen are the ones /hand means.
+    setSession({ podsShown: view.pods.map(p => p.sessionId) })
+    const onFill = async (id: string) => $.ui.toast(await fillWaiting($, id))
+    return podsTree($.ui.resolve(e), podRows(view.pods, view.overlaps, now), view.waiting, onFill)
   })
 
   on('command.run', { command: 'undone' }, async $ => {
@@ -1119,7 +1743,7 @@ export const register: Register = (on, options) => {
   // /wear razor|compass|horns|none: what Phi holds, until changed or the session ends (1.1).
   on('command.run', { command: 'wear' }, async ($, e) => {
     const costume = parseCostume(e.args)
-    if (costume === null) return { text: 'Usage: /wear razor | compass | horns | none' }
+    if (costume === null) return { text: 'Usage: /wear razor | compass | horns | devil | none' }
     await update($, costumeAtom, () => costume)
     return { text: costume === 'none' ? 'Phi wears nothing.' : `Phi wears the ${costume}.` }
   })
@@ -1127,16 +1751,23 @@ export const register: Register = (on, options) => {
   // /barnacles: the problems the barnacles record, each with a scrub (1.1, Bradley 2026-10-09).
   on('command.run', { command: 'barnacles' }, async $ => {
     const list: Barnacle[] = await read($, barnaclesAtom)
-    if (list.length === 0) return { text: 'No barnacles on the shell: nothing has recurred across sessions.' }
+    const pairs: RepairPair[] = await read($, repairsAtom)
+    if (list.length === 0 && pairs.length === 0) {
+      return { text: 'No barnacles on the shell and no repair pairs: nothing has recurred, and no failure has been cured.' }
+    }
     await $.ui.open({ id: BARNACLES_PANE, title: 'Barnacles' })
-    return { text: `${list.length} barnacle${list.length === 1 ? '' : 's'} on the shell - the list is open in the Barnacles pane.` }
+    // The repair pairs (1.2) sit under the barnacles: a cured failure is friction with its cure.
+    const kept = pairs.length > 0 ? ` and ${pairs.length} repair pair${pairs.length === 1 ? '' : 's'}` : ''
+    return { text: `${list.length} barnacle${list.length === 1 ? '' : 's'} on the shell${kept} - the list is open in the Barnacles pane.` }
   })
 
   on('ui.render', { component: 'Pane', requestId: BARNACLES_PANE }, async ($, e) => {
     const list: Barnacle[] = await read($, barnaclesAtom)
+    const pairs: RepairPair[] = await read($, repairsAtom)
     const onScrub = (key: string) => scrubBarnacles($, key)
     const onScrubAll = () => scrubBarnacles($, null)
-    return barnaclesTree($.ui.resolve(e), list, onScrub, onScrubAll)
+    const onTreat = async (key: string) => $.ui.toast(await treatBarnacle($, key))
+    return barnaclesTree($.ui.resolve(e), list, onScrub, onScrubAll, pairs.map(pairLine), onTreat)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -1171,10 +1802,20 @@ export const register: Register = (on, options) => {
           await update($, noticesAtom, q => dismiss(q, beneath, at))
         }
       : null
+    // The guest seam (1.3): a guest drawing standing narrow above the band puts the horns on Phi
+    // for this draw only; the costume atom is never written.
+    const guest: any = splitBeneath(below).guest
+    const guestKey = guest?.props?.key
+    const horned =
+      guest !== null &&
+      guest !== undefined &&
+      e.props.bodyColumns < GUEST_MIN_BODY &&
+      typeof guestKey === 'string' &&
+      guestKey.startsWith(GUEST_OWNER_PREFIX)
     const view = buildView({
       body: s.body,
       frameIndex: await read($, frameAtom),
-      costume: await read($, costumeAtom),
+      costume: horned ? 'devil' : await read($, costumeAtom),
       ledger: await read($, ledgerAtom),
       asks: await read($, asksAtom),
       activity: await read($, activityAtom),
@@ -1190,6 +1831,9 @@ export const register: Register = (on, options) => {
     })
     const ticket = await read($, ticketAtom)
     const footer = { n: shown.n, m: shown.m, onDismiss }
-    return bandTree($.ui.resolve(e), e.props.bodyColumns, view, below, EYE_ROW[s.body][view.size], ticket, footer)
+    // The sonar's part of the one line (1.2): `pods N`, `!K` in warning colour while files overlap.
+    const pods: SonarView = await read($, sonarAtom)
+    const sonar = s.sonarDir === null ? null : { text: bandPods(pods.pods, pods.overlaps), warn: pods.overlaps.length > 0 }
+    return bandTree($.ui.resolve(e), e.props.bodyColumns, view, below, EYE_ROW[s.body][view.size], ticket, footer, sonar)
   })
 }
