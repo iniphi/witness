@@ -3,6 +3,7 @@
 ## Unreleased
 
 - 2026-10-09: `SECURITY.md`: how to report a vulnerability privately through GitHub's private vulnerability reporting, the supported versions, and what is in and out of scope. The README links it.
+- 2026-10-09: README gains a Contributing section: issues and pull requests are welcome, and the maintainer applies an accepted pull request in the source repository, with credit here, rather than merging it on GitHub.
 
 ## 1.0.0 - 2026-10-09
 

@@ -12,7 +12,7 @@ Use GitHub's private vulnerability reporting: open this repository's **Security*
 
 Include the witness version, your Claude Code version, what you did, what happened and what you expected. A minimal reproduction helps most.
 
-witness has one maintainer, so responses are best effort. You should hear back within seven days. When a fix is released, the advisory is published, with credit to you if you want it.
+witness has one maintainer, so responses are best effort. You will hear back, but there is no fixed response time. When a fix is released, the advisory is published, with credit to you if you want it.
 
 ## In scope
 

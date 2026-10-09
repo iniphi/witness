@@ -93,6 +93,10 @@ claude plugin test <path to witness>
 
 The pure modules in `hooks/` each have a `*.test.ts` beside them. `hooks/register.tsx` is the hooks module, the only file that calls the engine.
 
+## Contributing
+
+Issues and pull requests are welcome. witness is developed in a separate source repository and published here at each release, so the maintainer applies an accepted pull request there, with credit in the CHANGELOG, rather than merging it here.
+
 ## Security
 
 To report a vulnerability, see `SECURITY.md`. Please do not open a public issue for one.
