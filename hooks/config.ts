@@ -91,6 +91,21 @@ export function under(base: string, rel: string): string {
 }
 
 /**
+ * The mod's folder from its hooks module's own `import.meta.url`, a second word on where
+ * the mod is for when the engine's `$.plugin.root` is blank (the estate line vanished for a
+ * morning on 2026-10-09 when it was): `file:///C:/x/mods/witness/hooks/register.tsx` gives
+ * `C:/x/mods/witness`, and so does the POSIX form. '' for anything that is not a file URL
+ * of a module under a `hooks/` folder.
+ */
+export function rootFromModuleUrl(url: unknown): string {
+  if (typeof url !== 'string' || !url.startsWith('file://')) return ''
+  const path = decodeURIComponent(url.slice('file://'.length))
+  const local = /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path
+  const m = /^(.+)\/hooks\/[^/]+$/.exec(local)
+  return m === null ? '' : normalizePath(m[1] ?? '')
+}
+
+/**
  * Where to look for a script, in order. A configured path is the only candidate
  * (relative to the session's folder); unset, `rel` under the mod's own folder and up
  * to SCRIPT_LEVELS folders above it, so the mod's own repository supplies it (in the

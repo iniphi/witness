@@ -1,6 +1,6 @@
 {
   "name": "witness",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Keeps a ledger of what you asked for and counts it done only on evidence: claims stay pale until a read-back confirms them, bare SQL UPDATE or DELETE writes are held for your answer, and a print of what was and was not witnessed goes into the session log.",
   "author": {
     "name": "Bradley Higginson"

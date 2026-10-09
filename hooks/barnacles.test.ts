@@ -75,15 +75,27 @@ test('frictionFrom flags the second consecutive failure of one tool', () => {
   expect(frictionFrom({ ...base, tool: 'Bash', isError: false, recent: [call('Bash', {}, true)] })).toEqual([])
 })
 
-test('frictionFrom flags the third edit of one file, once', () => {
+// Bradley, 2026-10-09: "edits to a file within a repo that are part of the actual task at
+// hand is not strictly a barnacle". The third edit of one file is the work, never friction.
+test('frictionFrom never flags a repeated edit of one file', () => {
   const p = { file_path: 'C:\\Work\\A.ts' }
   const two = [call('Edit', p, false, 1), call('Write', { file_path: 'c:/work/a.ts' }, false, 2), call('Edit', { file_path: 'other' }, false, 3)]
-  const third = frictionFrom({ ...base, tool: 'Edit', input: p, recent: two, at: 9 })
-  expect(third.map((x) => [x.kind, x.key, x.at])).toEqual([['re-edit', 'c:/work/a.ts', 9]])
-  const fourth = frictionFrom({ ...base, tool: 'Edit', input: p, recent: [...two, call('Edit', p, false, 4)] })
-  expect(fourth).toEqual([])
-  expect(frictionFrom({ ...base, tool: 'Edit', input: p, recent: two.slice(0, 1) })).toEqual([])
-  expect(frictionFrom({ ...base, tool: 'Edit', input: null, recent: two })).toEqual([])
+  expect(frictionFrom({ ...base, tool: 'Edit', input: p, recent: two, at: 9 })).toEqual([])
+  expect(frictionFrom({ ...base, tool: 'Edit', input: p, recent: [...two, call('Edit', p, false, 4)] })).toEqual([])
+})
+
+// "real friction comes from calls, misremembering": an MCP tool's error is friction at once.
+test('frictionFrom flags an MCP tool error at once, with the error as its detail', () => {
+  const out = frictionFrom({
+    ...base,
+    tool: 'mcp__claude_ai_Supabase__execute_sql',
+    isError: true,
+    resultText: 'ERROR:  column "to_agent" does not exist\nLINE 1: select to_agent from workspace.router_inbox',
+    at: 11,
+  })
+  expect(out.map((x) => [x.kind, x.key, x.at])).toEqual([['tool-failure', 'mcp__claude_ai_Supabase__execute_sql', 11]])
+  expect(out[0]!.detail).toEqual('mcp__claude_ai_Supabase__execute_sql failed: ERROR: column "to_agent" does not exist LINE 1: select to_agent from workspace.r')
+  expect(frictionFrom({ ...base, tool: 'mcp__claude_ai_Notion__notion-fetch', isError: false, resultText: 'ok' })).toEqual([])
 })
 
 test('recurPrompt carries the fixed text first and the keys last', () => {

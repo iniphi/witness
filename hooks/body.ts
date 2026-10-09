@@ -3,6 +3,18 @@ import type { Body, Mood, Size } from '../types'
 const PALE: Record<Body, string> = { phi: '#CFC8BC', phial: '#BFD0D3' }
 const DEEP: Record<Body, string> = { phi: '#876D4C', phial: '#B9771F' }
 
+/**
+ * The inks the chime and the barnacles wear live, apart from the body colour, the way the
+ * metered eye already does (Bradley, 2026-10-09): iniphi teal for the bells, iniphi gold for
+ * the barnacles. A held write's safelight still colours the whole creature.
+ */
+export const INKS: Readonly<{ bells: string; barnacles: string; costume: string }> = {
+  bells: '#649090',
+  barnacles: '#B59670',
+  // A costume is red (Bradley's live look, 2026-10-09): the theme's error colour, never a hex, as the lab draws every prop.
+  costume: 'error',
+}
+
 function channel(hex: string, i: number): number {
   return parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
 }

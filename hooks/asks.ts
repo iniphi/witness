@@ -484,7 +484,10 @@ export function printSection(asks: Ask[], ledger: Ledger, extra: readonly string
   const items = listed(live.filter(isSessionAsk), '')
   const carriedItems = listed(live.filter((a) => a.source === 'carried'), ' (carried)')
   const builds = live.filter((a) => a.source === 'build').map((a) => `- ${cleanText(a.text)} (build)`)
-  const paleClaims = ledger.claims.filter((cl) => cl.state === 'pale').map((cl) => `- pale claim: ${cleanText(cl.text)}`)
+  // A subagent's report is labelled as one (1.1): the main session has still to read it back.
+  const paleClaims = ledger.claims
+    .filter((cl) => cl.state === 'pale')
+    .map((cl) => `- pale ${cl.agentId === undefined ? 'claim' : 'agent claim'}: ${cleanText(cl.text)}`)
   const lines = [
     '## Witness print',
     '',

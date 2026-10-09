@@ -4,11 +4,14 @@ import {
   MAX_CLAIMS,
   MAX_WRITES,
   bound,
+  claimLabel,
   classify,
   developByAsks,
   emptyLedger,
   isDoneClaim,
   paleCount,
+  readsName,
+  recordAgentTurn,
   recordCall,
   recordTurn,
   share,
@@ -350,4 +353,120 @@ test('isDoneClaim judges the first done-word, in a clause of its own', () => {
   expect(isDoneClaim('No problem, done.')).toBe(true)
   expect(isDoneClaim('Not pushed yet. Everything else is done.')).toBe(false)
   expect(isDoneClaim('Is it done? Yes: fixed.')).toBe(true)
+})
+
+// ---- agent claims (1.1, ruled 2026-10-09: a subagent's final report is a claim the main session reads back)
+
+const agentCall = (l: Ledger, agentId: string, classified: Classified): Ledger =>
+  recordCall(l, { turnId: 't1', at: ++seq, ids: classified.writes.map((_, i) => `a${seq}-${i}`), classified, agentId })
+const report = (l: Ledger, agentId: string, answer: string) =>
+  recordAgentTurn(l, { agentId, at: ++seq, answer, id: `c-${agentId}` })
+
+test("an agent's write rides the main turn id, attributed to the agent; a main write carries no agent", () => {
+  const l = agentCall(call(emptyLedger(), 't1', W('file', 'm.ts')), 'ag1', W('file', 'a.ts', true))
+  expect(l.writes.map((w) => [w.target, w.turnId, w.agentId, w.witnessed])).toEqual([
+    ['m.ts', 't1', undefined, false],
+    ['a.ts', 't1', 'ag1', false],
+  ])
+  expect('agentId' in (l.writes[0] as object)).toBe(false)
+  expect(l.agents).toEqual({ ag1: 1 })
+  expect(l.turns.t1).toEqual({ calls: 1, reads: 0, writes: 1 })
+})
+
+test('an agent claim is pale at birth even over witnessed writes, and develops only on a later main read', () => {
+  let l = agentCall(emptyLedger(), 'ag1', W('file', 'a.ts'))
+  l = call(l, 't1', R('file', 'a.ts'))
+  expect(witnessed(l)).toEqual([true])
+  const r = report(l, 'ag1', 'Done: a.ts is fixed.')
+  expect([r.claim?.state, r.claim?.agentId, r.claim?.turnId, r.claim?.writeIds]).toEqual(['pale', 'ag1', 'agent:ag1', [l.writes[0]?.id]])
+  const agentRead = agentCall(r.ledger, 'ag1', R('file', 'a.ts'))
+  expect(agentRead.claims[0]?.state).toBe('pale')
+  const elsewhere = call(agentRead, 't2', R('file', 'b.ts'))
+  expect(elsewhere.claims[0]?.state).toBe('pale')
+  expect(call(elsewhere, 't2', R('file', 'a.ts')).claims[0]?.state).toBe('developed')
+})
+
+test('each write a report rests on needs its own main read-back', () => {
+  let l = agentCall(emptyLedger(), 'ag1', W('file', 'a.ts'))
+  l = agentCall(l, 'ag1', W('file', 'b.ts'))
+  l = report(l, 'ag1', 'Done.').ledger
+  l = call(l, 't2', R('file', 'a.ts'))
+  expect([l.claims[0]?.state, l.claims[0]?.unread]).toEqual(['pale', [l.writes[1]?.id]])
+  expect(call(l, 't2', R('file', 'b.ts')).claims[0]?.state).toBe('developed')
+})
+
+test('no done-word, or an agent no call was seen from, mints nothing', () => {
+  const l = agentCall(emptyLedger(), 'ag1', W('file', 'a.ts'))
+  expect(report(l, 'ag1', 'I read the walker and found where it breaks.').claim).toBeNull()
+  const fork = report(l, 'fork-1', 'Memory updated.')
+  expect(fork.claim).toBeNull()
+  expect(fork.ledger).toBe(l)
+})
+
+test('a report on no write develops when the main loop reads a target it names; naming none, it stays pale', () => {
+  const l = agentCall(emptyLedger(), 'ag1', R('file', 'c:/x/a.ts'))
+  const named = report(l, 'ag1', 'Done: checked mods/witness/hooks/view.ts and workspace.todo_mirror.').ledger
+  expect(named.claims[0]?.names).toEqual([
+    { kind: 'file', target: 'mods/witness/hooks/view.ts' },
+    { kind: 'sql', target: 'workspace.todo_mirror' },
+  ])
+  expect(call(named, 't2', R('file', '*')).claims[0]?.state).toBe('pale')
+  expect(agentCall(named, 'ag2', R('sql', 'workspace.todo_mirror')).claims[0]?.state).toBe('pale')
+  expect(call(named, 't2', R('sql', 'workspace.todo_mirror')).claims[0]?.state).toBe('developed')
+  expect(call(named, 't2', R('file', 'c:/repo/mods/witness/hooks/view.ts')).claims[0]?.state).toBe('developed')
+  const bare = report(l, 'ag1', 'Done, all good.').ledger
+  expect(bare.claims[0]?.names).toEqual([])
+  expect(call(bare, 't2', R('file', 'c:/x/a.ts')).claims[0]?.state).toBe('pale')
+})
+
+test('readsName: the same target or a folder above a named file; never the * of a test run', () => {
+  expect(readsName({ kind: 'file', target: 'c:/x' }, { kind: 'file', target: 'c:/x/a.ts' })).toBe(true)
+  expect(readsName({ kind: 'file', target: '*' }, { kind: 'file', target: 'c:/x/a.ts' })).toBe(false)
+  expect(readsName({ kind: 'file', target: 'c:/xy/a.ts' }, { kind: 'file', target: 'y/a.ts' })).toBe(false)
+  expect(readsName({ kind: 'sql', target: 'c:/x/a.ts' }, { kind: 'file', target: 'c:/x/a.ts' })).toBe(false)
+})
+
+test('previousClaim ignores agent claims: the next main claim covers writes left since the last main claim', () => {
+  let l = call(emptyLedger(), 't1', W('file', 'a.ts'))
+  l = turn(l, 't1', 'Done.').ledger
+  l = call(l, 't2', W('file', 'b.ts'))
+  l = agentCall(l, 'ag1', W('file', 'c.ts'))
+  l = report(l, 'ag1', 'Done.').ledger
+  const r = turn(l, 't3', 'Done.')
+  const id = (target: string) => l.writes.find((w) => w.target === target)?.id
+  expect(r.claim?.writeIds).toEqual([id('b.ts'), id('c.ts')])
+})
+
+test('a pale agent claim develops through its matched asks, as any claim', () => {
+  const l = report(agentCall(emptyLedger(), 'ag1', W('file', 'a.ts')), 'ag1', 'Done.').ledger
+  expect(developByAsks(l, [{ claimId: 'c-ag1', state: 'witnessed' }]).claims[0]?.state).toBe('developed')
+  expect(developByAsks(l, [{ claimId: 'c-ag1', state: 'claimed' }]).claims[0]?.state).toBe('pale')
+})
+
+test('a later report from the same agent replaces its claim, keeping the id its asks ride on', () => {
+  let l = agentCall(emptyLedger(), 'ag1', W('file', 'a.ts'))
+  l = report(l, 'ag1', 'Done.').ledger
+  l = agentCall(l, 'ag1', W('file', 'b.ts'))
+  const again = recordAgentTurn(l, { agentId: 'ag1', at: ++seq, answer: 'Fixed both.', id: 'c-new' })
+  expect(again.ledger.claims.map((c) => [c.id, c.writeIds.length, c.text])).toEqual([['c-ag1', 2, 'Fixed both.']])
+})
+
+test('agent claims never mutate the ledger they are given; claimLabel names them', () => {
+  const l = agentCall(emptyLedger(), 'ag1', W('file', 'a.ts'))
+  const before = JSON.stringify(l)
+  const r = report(l, 'ag1', 'Done.')
+  expect(JSON.stringify(l)).toBe(before)
+  const minted = JSON.stringify(r.ledger)
+  call(r.ledger, 't2', R('file', 'a.ts'))
+  expect(JSON.stringify(r.ledger)).toBe(minted)
+  expect(claimLabel({ text: 'Done.', agentId: 'ag1' })).toBe('agent claim: Done.')
+  expect(claimLabel({ text: 'Done.' })).toBe('Done.')
+})
+
+test('agent call counts are bounded, oldest agents dropped first', () => {
+  let l = emptyLedger()
+  for (let i = 0; i < 205; i++) l = agentCall(l, `ag${i}`, R('file', 'x.ts'))
+  const ids = Object.keys(l.agents ?? {})
+  expect(ids).toHaveLength(200)
+  expect(ids[0]).toBe('ag5')
 })

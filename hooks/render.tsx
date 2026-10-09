@@ -2,9 +2,10 @@
 // surface's element table (`$.ui.resolve(e)`), never `$` itself: the engine follows
 // `$` only within the hooks module's own file.
 
-import type { Claim, Ticket } from '../types'
+import type { Barnacle, Claim, Ticket } from '../types'
 import type { PaneRow } from './asks'
 import { DISMISS_KEY, DISMISS_LABEL, countText, footerRow, footerText, wrapLines } from './notices'
+import { INKS } from './body'
 import { BAR_GLYPH } from './ticket'
 import { SAFELIGHT, SPRITE_WIDTH } from './view'
 import type { View } from './view'
@@ -230,32 +231,45 @@ function ticketLine(t: any, ticket: Ticket | null, status: string, ink: string |
   )
 }
 
-/** The eye columns on sprite row `row`, left to right. */
-function eyeColumns(eyes: Array<[number, number]>, row: number): number[] {
-  return eyes
-    .filter(([r]) => r === row)
-    .map(([, c]) => c)
-    .sort((a, b) => a - b)
+/** A cell on a sprite row that takes its own ink. */
+export type InkSpan = { col: number; color: string }
+
+/**
+ * The cells on sprite row `row` that take their own ink, left to right: the worn costume in
+ * red, the chime in the bells' ink, the barnacles in theirs (1.1), and the eyes in the
+ * warning colour when the repo is metered, so a push would be held (S165). An eye drawn
+ * over by a costume still counts as an eye: the cell table, not the glyph, says where it is.
+ */
+export function rowInks(view: View, row: number, meteredEyes: boolean): InkSpan[] {
+  const at = (cells: Array<[number, number]>, color: string): InkSpan[] =>
+    cells.filter(([r]) => r === row).map(([, c]) => ({ col: c, color }))
+  return [
+    ...at(view.costume, INKS.costume),
+    ...at(view.bells, INKS.bells),
+    ...at(view.barnacles, INKS.barnacles),
+    ...(meteredEyes ? at(view.eyes, 'warning') : []),
+  ].sort((a, b) => a.col - b.col)
 }
 
 /**
- * A sprite row with its eye cells in the warning colour: the repo is metered, so a
- * push would be held (S165). The rest of the row keeps the creature's own colour.
+ * A sprite row with its inked cells as spans of their own colour; the rest of the row
+ * keeps the creature's own colour. A column named twice is inked once, by the first span.
  */
-function eyeSpans(t: any, row: string, cols: number[]): any {
-  if (cols.length === 0) return row
+function inkSpans(t: any, row: string, inks: InkSpan[]): any {
+  if (inks.length === 0) return row
   const { Text } = t
   const chars = Array.from(row)
   const out: any[] = []
   let from = 0
-  for (const c of cols) {
-    if (c > from) out.push(chars.slice(from, c).join(''))
+  for (const { col, color } of inks) {
+    if (col < from || col >= chars.length) continue
+    if (col > from) out.push(chars.slice(from, col).join(''))
     out.push(
-      <Text key={`e${c}`} color="warning">
-        {chars[c] ?? ''}
+      <Text key={`i${col}`} color={color}>
+        {chars[col] ?? ''}
       </Text>,
     )
-    from = c + 1
+    from = col + 1
   }
   if (from < chars.length) out.push(chars.slice(from).join(''))
   return out
@@ -320,7 +334,7 @@ export function bandTree(
         <Box flexDirection="column" flexShrink={0} width={SPRITE_WIDTH[view.size]}>
           {view.sprite.map((row, i) => (
             <Text key={`s${i}`} color={ink ?? view.colour} wrap="truncate-end">
-              {meteredEyes ? eyeSpans(t, row, eyeColumns(view.eyes, i)) : row}
+              {ink === undefined ? inkSpans(t, row, rowInks(view, i, meteredEyes)) : row}
             </Text>
           ))}
         </Box>
@@ -393,6 +407,50 @@ export function paneTree(
         <Text key={`c${c.id}`} dimColor wrap="truncate-end">
           {`  ~ ${c.text}`}
         </Text>
+      ))}
+    </Box>
+  )
+}
+
+/**
+ * The Barnacles pane (1.1): what each barnacle records, a scrub beside each, and one for all.
+ * A scrubbed barnacle leaves the shell at once and grows back only from new friction.
+ */
+export function barnaclesTree(
+  t: any,
+  barnacles: Barnacle[],
+  onScrub: (key: string) => unknown,
+  onScrubAll: () => unknown,
+): any {
+  const { Box, Button, Text } = t
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row">
+        <Box flexGrow={1} flexShrink={1}>
+          <Text dimColor wrap="truncate-end">
+            Friction that recurs across sessions: the same problem on two or more days. Scrub one off, or all.
+          </Text>
+        </Box>
+        {barnacles.length > 0 && (
+          <Box flexShrink={0} marginLeft={2}>
+            <Button key="scrub-all" label="scrub all" variant="primary" onPress={() => onScrubAll()} />
+          </Box>
+        )}
+      </Box>
+      {barnacles.length === 0 && <Text dimColor>No barnacles: nothing has recurred.</Text>}
+      {barnacles.map(b => (
+        <Box key={`b${b.key}`} flexDirection="row">
+          <Box flexGrow={1} flexShrink={1}>
+            <Text wrap="truncate-end">
+              {'* '}
+              {b.text}
+              <Text dimColor>{`  (${b.key})`}</Text>
+            </Text>
+          </Box>
+          <Box flexShrink={0} marginLeft={2}>
+            <Button key={`scrub-${b.key}`} label="scrub" plain onPress={() => onScrub(b.key)} />
+          </Box>
+        </Box>
       ))}
     </Box>
   )

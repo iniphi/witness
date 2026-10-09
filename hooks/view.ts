@@ -1,14 +1,15 @@
 // The band's view model: everything the drawing needs, from plain state. Pure.
 
-import type { Activity, Ask, Barnacle, Body, Hold, Ledger, Size, Speech } from '../types'
+import type { Activity, Ask, Barnacle, Body, Costume, Hold, Ledger, Size, Speech } from '../types'
 import { counts, nm } from './asks'
-import { bellsRung, isIdle } from './bells'
+import { bellHalves, isIdle } from './bells'
 import { colourFor, moodFor, sizeFor, speechBox } from './body'
-import { eyeCellsOf, frame, withBarnacles, withBells, withMood } from './sprites'
+import { barnacleCellsOf, bellCellsOf, eyeCellsOf, frame, propCells, withBarnacles, withBells, withMood, withProp } from './sprites'
 import { paleCount, share } from './witness'
 
 export const SAFELIGHT = '#C0392B'
-export const SPRITE_WIDTH: Readonly<Record<Size, number>> = { full: 28, compact: 12 }
+/** Compact grew from 12 to 14 columns for the chime at the creature's back (1.1, Bradley 2026-10-09). */
+export const SPRITE_WIDTH: Readonly<Record<Size, number>> = { full: 28, compact: 14 }
 /** The row of the creature's eye per body and size; the speech tail sits on it. */
 export const EYE_ROW: Readonly<Record<Body, Record<Size, number>>> = {
   phi: { full: 3, compact: 2 },
@@ -33,6 +34,8 @@ export type ViewInput = {
   bodyColumns: number
   /** `left`: the creature sits at the right edge and faces its bubble. Default right (as drawn). */
   facing?: 'left' | 'right'
+  /** What Phi wears (the /wear command, 1.1); `none` by default. A costume shows on the compact Phi only. */
+  costume?: Costume
 }
 
 export type View = {
@@ -42,6 +45,12 @@ export type View = {
   safelight: boolean
   /** Where the eyes are in `sprite` ([row, column], columns in code points), as drawn. */
   eyes: Array<[number, number]>
+  /** The chime's four bell cells in `sprite`, top to bottom, as drawn; they take their own ink (1.1). */
+  bells: Array<[number, number]>
+  /** The cells the drawn barnacles occupy in `sprite`, as drawn; they take their own ink (1.1). */
+  barnacles: Array<[number, number]>
+  /** The cells the worn costume occupies in `sprite`, as drawn; red (1.1). Empty when Phi wears nothing. */
+  costume: Array<[number, number]>
   status: string
   /** The speech as box-drawn rows (kept for the full-size print and tests). */
   speech: string[]
@@ -57,6 +66,12 @@ const MIRROR: Readonly<Record<string, string>> = {
   ')': '(',
   '<': '>',
   '>': '<',
+  // The horn tips are stored as 9 9 and read 6 6 on screen (Bradley, 2026-10-09); the lab's pair.
+  '6': '9',
+  '9': '6',
+  // A half bell keeps its black half toward the shell when the creature turns (1.1).
+  '◐': '◑',
+  '◑': '◐',
   '[': ']',
   ']': '[',
   '{': '}',
@@ -115,8 +130,10 @@ function spriteRows(v: ViewInput, size: Size): string[] {
   const base = frame(v.body, size, v.frameIndex)
   // Calm keeps each frame's own eye, so the idle frames can blink.
   const moody = mood === 'calm' ? base : withMood(base, v.body, size, mood)
-  const belled = withBells(moody, v.body, size, bellsRung(v.activity))
-  return withBarnacles(belled, v.body, size, v.barnacles.length)
+  const belled = withBells(moody, v.body, size, bellHalves(v.activity))
+  const crusted = withBarnacles(belled, v.body, size, v.barnacles.length)
+  const costume = v.costume ?? 'none'
+  return costume === 'none' ? crusted : withProp(crusted, v.body, size, costume)
 }
 
 export function buildView(v: ViewInput): View {
@@ -139,15 +156,26 @@ export function buildView(v: ViewInput): View {
         })
       : []
   const left = v.facing === 'left'
-  const eyes = eyeCellsOf(sprite, v.body, size).map(([r, c]): [number, number] =>
-    left ? [r, Array.from(sprite[r] ?? '').length - 1 - c] : [r, c],
-  )
+  // Cells as drawn: a creature turned to face left has every column counted from the far edge.
+  const asDrawn = (cells: Array<[number, number]>): Array<[number, number]> =>
+    cells.map(([r, c]): [number, number] => (left ? [r, Array.from(sprite[r] ?? '').length - 1 - c] : [r, c]))
+  const eyes = asDrawn(eyeCellsOf(sprite, v.body, size))
+  const bells = asDrawn(bellCellsOf(sprite, v.body, size))
+  const barnacles = asDrawn(barnacleCellsOf(v.body, size, v.barnacles.length))
+  const worn = v.costume ?? 'none'
+  const costume =
+    worn === 'none' || v.body !== 'phi' || size !== 'compact'
+      ? []
+      : asDrawn(propCells(worn).map(([r, c]): [number, number] => [r, c]))
   return {
     size,
     sprite: left ? mirror(sprite) : sprite,
     colour: colourFor(v.body, share(v.ledger)),
     safelight: v.hold !== null,
     eyes,
+    bells,
+    barnacles,
+    costume,
     status: statusLine(v.ledger, v.asks, v.hold),
     speech: box,
     bubble: speech === null ? null : { header: speech.header, text: speech.text },

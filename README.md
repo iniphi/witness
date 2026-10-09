@@ -6,11 +6,12 @@ witness is a plugin of function hooks. It sits in the session beside you, keeps 
 
 ## What it does
 
-- **The asks ledger.** A Haiku side pass reads each prompt you type and records the asks in it. If the session keeps a log, the checkbox items under its Goals heading are added too. The band shows `asks n/m`, where n is the number witnessed. `/undone` lists every ask as witnessed, pale (claimed but not proven) or open. Standing instructions ("explain as we go") are not recorded. Work that spans several sessions is listed apart as `builds N` and is never counted. Text you quote or paste is not read as an ask. At the end of a watch, an open ask nobody claimed carries into the next one once, shown apart as `carried N`.
-- **Claims develop only on read-back.** When the agent says something is done, the claim stays pale until a later read of the same target lands, such as a file read, a SELECT or a fetch. A claim whose matched asks are all witnessed develops with them. The agent cannot certify its own write.
+- **The asks ledger.** A Haiku side pass reads each prompt you type and records the asks in it. If the session keeps a log, the checkbox items under its Goals heading are added too; the log is the one this session itself created or opened, never another session's. The band shows `asks n/m`, where n is the number witnessed. `/undone` lists every ask as witnessed, pale (claimed but not proven) or open. Standing instructions ("explain as we go") are not recorded. Work that spans several sessions is listed apart as `builds N` and is never counted. Text you quote or paste is not read as an ask. At the end of a watch, an open ask nobody claimed carries into the next one once, shown apart as `carried N`.
+- **Claims develop only on read-back.** When the agent says something is done, the claim stays pale until a later read of the same target lands, such as a file read, a SELECT or a fetch. A claim whose matched asks are all witnessed develops with them. The agent cannot certify its own write. A subagent's final report is a claim too: it stays pale until the main session reads back what the report rests on, and a report is never evidence for the confirm tool.
 - **The `execute_sql` hold.** A Supabase MCP `execute_sql` UPDATE or DELETE that has no RETURNING clause is held, and you choose: add RETURNING, let it through once, or cancel. A headless run (`claude -p`) or a subagent has nobody to ask, so there the write is refused. witness never approves a call past another guard.
 - **The confirm tool.** The agent reports a finished ask through the `confirm` tool and must cite evidence: a tool result already in the session, or your words. It can mark an ask dropped only on your words. A close paraphrase of an ask is accepted when exactly one live ask clearly matches. If a turn calls something done without proof, the next prompt carries one short line asking the agent to confirm it.
 - **The print.** `/wrap` writes a Witness print into the open session log: asks witnessed, pale and open, writes held, friction, notes taken, and hook or skill candidates. It then hands the print to the main session, which settles what is done and says what each open line waits on, without starting new work. The close command (default `/close`) writes the same print before it runs. A project with no session log gets the print attached to the close prompt.
+- **The companion.** A nautilus (or a flask, by `body`) at the right of the band, facing the line. Its colour deepens as more of the session's claims are proved. A chime of three bells hangs at its back, an hour of active work each, filling from the bottom with a half bell for thirty minutes; `*` barnacles on its shell are friction that recurs across sessions (a cancelled or refused write, a call that keeps failing, an MCP tool's error; never the edits of a file you are building), and `/barnacles` lists what they record and scrubs them off; its eye turns amber in a repository whose push would start a metered build, and the whole creature turns red while a write is held. The bells and the barnacles wear their own inks. `/wear` dresses it in a costume.
 
 ## Install
 
@@ -37,7 +38,7 @@ Set these with `/config` or when you install. Every key is optional.
 |---|---|---|
 | `body` | `phi` | The companion's body: `phi` (nautilus) or `phial` (round-bottom flask). |
 | `watchHold` | `false` | At session start, and after five idle minutes, ask before the first prompt goes through. |
-| `ticketScript` | empty | A script that prints a status ticket as JSON, as a path relative to the session folder or absolute. If it is empty and no ticket script sits beside the mod, there is no ticket, and the line shows the companion's own counts. |
+| `ticketScript` | empty | A script that prints a status ticket as JSON, as a path relative to the session folder or absolute. If it is empty and no ticket script sits beside the mod, there is no ticket, and the line shows the companion's own counts. The mod looks beside itself from the folder Claude Code reports for it, or from its own file when that is blank; if it has nowhere to look from, the line shows `estate: ?` rather than nothing. |
 | `watchScript` | empty | A script that reads a work board for the watch and its poll. If it is empty and none is found, no board is polled. |
 | `writerCalls` | `workspace.close_todo, workspace.set_todo_status, workspace.pause_todo, workspace.crosstalk_*, workspace.record_board_attention, workspace.claim_item, workspace.release_claim` | SQL functions that a SELECT calls to write, written as `schema.name`, where a trailing `*` matches any suffix. These count as writes. The list does nothing where that schema does not exist. |
 | `person` | `you` | How the print and the confirm tool name you. The default prints "on your words", and the model reads "the user". |
@@ -50,6 +51,8 @@ Set these with `/config` or when you install. Every key is optional.
 - `/undone` lists every ask in this watch: witnessed, pale or open.
 - `/wrap` ends the watch, writes the print into the session log and hands it to the main session to settle.
 - `/tackle` puts a prompt in the prompt box for a run over the undone asks. You read it and decide whether to send it. It never sends on its own.
+- `/barnacles` opens a pane with what each barnacle on the shell records, a `scrub` beside each and a `scrub all`. A scrubbed barnacle leaves the shell at once, and the moment the same friction is recorded again it is back with its old words, unspoken, so you hear it again: the scrub did not hold.
+- `/wear razor`, `/wear compass`, `/wear horns` dress the companion for the session; `/wear none` undresses it. A costume is how a later companion plugin shows which role is speaking, and another plugin can set one through the same command.
 - **Dismiss.** There is no `/dismiss` command. While witness is showing a notice that can be dismissed, a `0: Dismiss` button sits at its foot, bound to the `0` key. A held write is never dismissed, only answered. When more than one notice is waiting, `<n/m>` shows your place in the queue.
 
 ## Footprint
@@ -82,7 +85,8 @@ barnacles about 1,300.
 The usage file records every model turn's tokens beside the side passes, so a session's whole
 spend can be read next to witness's share. Those turn figures are the session's cost, not
 witness's. witness does not price the work of subagents a session spawns: their tokens are
-recorded only as the host reports them, and nothing in the band follows what they do.
+recorded only as the host reports them. Since 1.1 a subagent's final report is a claim in the
+ledger, pale until the main session reads back what the report rests on.
 
 ## Development
 

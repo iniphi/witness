@@ -8,10 +8,12 @@ import type {
   BoardRow,
   Body,
   Candidate,
+  Costume,
   Friction,
   Heard,
   Hold,
   Ledger,
+  LogBinding,
   NoticeQueue,
   Observed,
   Spoken,
@@ -49,20 +51,29 @@ import {
   WATCH_SCRIPT,
   personRef,
   readConfig,
+  rootFromModuleUrl,
   scriptCandidates,
   writerPattern,
 } from './config'
 import type { Adapters, Config } from './config'
 import {
+  afterScrub,
+  asScrubbed,
   frictionFrom,
   markSpoken,
   mergeBarnacles,
   nextToSpeak,
   noteFriction,
   parseRecur,
+  realFriction,
   recurPrompt,
+  regrown,
+  scrub,
+  stampScrub,
+  unscrub,
 } from './barnacles'
 import type { RecentCall } from './barnacles'
+import { parseCostume } from './sprites'
 import {
   CONFIRM_TOOL,
   confirmDescription,
@@ -92,22 +103,23 @@ import {
   parseCandidates,
   shouldScan,
 } from './notes'
-import { bandTree, beneathText, paneTree } from './render'
+import { bandTree, barnaclesTree, beneathText, paneTree } from './render'
 import { needsHold, withReturning } from './sql'
 import {
   HELPER_TIMEOUT_MS,
   SIDE_PASS,
   askText,
+  bindLog,
   claimable,
   freshAsks,
   isCloseCommand,
   isOpenLog,
   isTacklePrompt,
   isWrapReadPrompt,
-  logCandidates,
+  logTouch,
+  needsOpenCheck,
   newIds,
   projectKey,
-  sessionsDir,
   storeKeys,
   tacklePrompt,
   tally,
@@ -117,14 +129,16 @@ import {
   withoutQuoted,
   wrapReadPrompt,
 } from './support'
-import { TICKET_MS, ticketFromRun } from './ticket'
+import type { LogTouch } from './support'
+import { TICKET_MS, UNAVAILABLE_TICKET, ticketFromRun } from './ticket'
 import { addUsage, turnRow, usageDir, usageFile, usagePath, usageRow } from './usage'
 import { EYE_ROW, HOLD_TEXT, buildView } from './view'
 import { dismiss, dismissable, enqueue, remove, settle, showing } from './notices'
 import { landedRows, parseRows, parseWatch, watchHeader, watchText } from './watch'
-import { classify, developByAsks, recordCall, recordTurn } from './witness'
+import { claimLabel, classify, developByAsks, recordAgentTurn, recordCall, recordTurn } from './witness'
 
 const PANE = 'witness-undone'
+const BARNACLES_PANE = 'witness-barnacles'
 const SQL_TOOL = 'mcp__claude_ai_Supabase__execute_sql'
 const FRAME_MS = 1_500
 const FRAME_CYCLE = [0, 0, 0, 1, 0, 0, 2, 0]
@@ -141,6 +155,9 @@ const HOLD_FAILED =
   'witness: the hold failed, so the write was NOT sent. Re-send it naming what it touches: WITH w AS (<statement> RETURNING *) SELECT * FROM w.'
 const SUBAGENT_HELD =
   'witness: a subagent may not send an UPDATE or DELETE that names nothing it touched (no one is there to answer the hold). Re-send it as WITH w AS (<statement> RETURNING *) SELECT * FROM w.'
+// 1.1 (ruled 2026-10-09): a subagent's report is a claim the main session reads back.
+const SUBAGENT_CONFIRM =
+  "witness: a subagent may not confirm asks. Its report is a claim the main session must read back; say what you changed, and the main session confirms on its own read-back."
 
 // Every value the band and the pane draw from, held by the host for the session
 // (they survive a hot reload; module variables do not). Declared here, not
@@ -157,6 +174,7 @@ const holdAtom = atom({ plugin: 'witness', key: 'hold' } as const, null as Hold 
 const watchAtom = atom({ plugin: 'witness', key: 'watch' } as const, PENDING_WATCH)
 const barnaclesAtom = atom({ plugin: 'witness', key: 'barnacles' } as const, [] as Barnacle[])
 const frameAtom = atom({ plugin: 'witness', key: 'frame' } as const, 0)
+const costumeAtom = atom({ plugin: 'witness', key: 'costume' } as const, 'none' as Costume)
 // The running turn survives a mid-turn hot reload, so its later writes stay in its claim.
 const turnAtom = atom({ plugin: 'witness', key: 'turn' } as const, 'turn-0')
 // What the confirm tool checks evidence against: calls the mod saw, and Bradley's own words.
@@ -170,6 +188,8 @@ const candidateScanAtom = atom({ plugin: 'witness', key: 'candidateScanAt' } as 
 const ticketAtom = atom({ plugin: 'witness', key: 'ticket' } as const, null as Ticket | null)
 // What each Haiku side pass cost (0.4.0), written to this session's usage file.
 const usageAtom = atom({ plugin: 'witness', key: 'usage' } as const, [] as UsageRow[])
+// The session log this watch follows (1.1): bound by the main loop's own file calls, kept across a hot reload.
+const logAtom = atom({ plugin: 'witness', key: 'log' } as const, null as LogBinding | null)
 
 // The session's plain values. The engine follows `$` only into functions declared at
 // the top of this file, so the helpers read this record rather than closures. It is
@@ -272,9 +292,29 @@ async function firstExisting($: any, paths: readonly string[]): Promise<string |
   return null
 }
 
+/**
+ * The mod's own folder: the engine's word (`$.plugin.root`), else this module's own
+ * location, which cannot be blank. Added after the estate line vanished for a morning
+ * (2026-10-09): the engine answered the lookup with nothing, the adapter read that as
+ * "no estate", and the band fell silent with no sign that it had not looked.
+ */
+function pluginRoot($: any): string {
+  let given: unknown = ''
+  try {
+    given = $.plugin.root
+  } catch {
+    given = ''
+  }
+  if (typeof given === 'string' && given !== '') return given
+  try {
+    return rootFromModuleUrl(import.meta.url)
+  } catch {
+    return ''
+  }
+}
+
 /** The adapters' scripts: configured, else found in the mod's own repository; absent, off. */
-async function findAdapters($: any, cwd: string): Promise<Adapters> {
-  const root: string = $.plugin.root ?? ''
+async function findAdapters($: any, cwd: string, root: string): Promise<Adapters> {
   return {
     ticket: await firstExisting($, scriptCandidates(s.config.ticketScript, root, cwd, TICKET_SCRIPT)),
     watch: await firstExisting($, scriptCandidates(s.config.watchScript, root, cwd, WATCH_SCRIPT)),
@@ -353,34 +393,46 @@ async function refreshTicket($: any): Promise<void> {
   await update($, ticketAtom, () => ticket)
 }
 
-/** The newest session log touched since this session started and not yet closed. */
-async function openLog($: any): Promise<{ path: string; text: string } | null> {
-  const dir = sessionsDir(s.cwd, s.config.sessionsDir)
+/**
+ * The session log this watch is bound to (1.1), read by its one path: no folder listing
+ * and no mtime test, so another session's log in the same repo is never followed.
+ * Unbound (a session that has not touched its log yet): null.
+ */
+async function boundLog($: any): Promise<{ path: string; text: string } | null> {
+  const bound: LogBinding | null = await read($, logAtom)
+  if (bound === null) return null
   try {
-    if (!(await $.fs.exists(dir))) return null
-    for (const name of logCandidates(await $.fs.list(dir), s.startedAt)) {
-      const path = `${dir}/${name}`
-      const text: string = await $.fs.read(path)
-      if (isOpenLog(text)) return { path, text }
-    }
+    if (!(await $.fs.exists(bound.path))) return null
+    const text: string = await $.fs.read(bound.path)
+    return { path: bound.path, text }
   } catch {
     return null
   }
-  return null
 }
 
-/** The newest session log touched since this session started, closed or not: the close triage lands after the close. */
+/** The bound log while it is open: its Goals are synced and the print is written into it. */
+async function openLog($: any): Promise<{ path: string; text: string } | null> {
+  const log = await boundLog($)
+  return log !== null && isOpenLog(log.text) ? log : null
+}
+
+/** The bound log, closed or not: the close triage lands after the close. */
 async function sessionLog($: any): Promise<{ path: string; text: string } | null> {
-  const dir = sessionsDir(s.cwd, s.config.sessionsDir)
-  try {
-    if (!(await $.fs.exists(dir))) return null
-    const name = logCandidates(await $.fs.list(dir), s.startedAt)[0]
-    if (name === undefined) return null
-    const path = `${dir}/${name}`
-    return { path, text: await $.fs.read(path) }
-  } catch {
-    return null
-  }
+  return boundLog($)
+}
+
+/**
+ * Binds the watch to the session log a main-loop file call touched (1.1). A Write of another
+ * log over a Write rebinds only once the bound log is closed, so that log is read first.
+ */
+async function bindTouch($: any, touch: LogTouch, now: number): Promise<void> {
+  const current: LogBinding | null = await read($, logAtom)
+  const open = needsOpenCheck(current, touch) ? (await openLog($)) !== null : true
+  const next = bindLog(current, touch, now, open)
+  if (next === current) return
+  await update($, logAtom, () => next)
+  // The goals' source moved: read its Goals now rather than at the next tick.
+  if (s.interactive && (current === null || current.path !== next?.path)) $.clock.after(0, () => syncGoals($, now))
 }
 
 /** What the close triage settled leaves the undone (0.8.0, a field report). */
@@ -464,7 +516,8 @@ async function loadStored($: any, now: number): Promise<void> {
     await update($, asksAtom, a => (a.length === 0 ? seeded : a))
   }
   const log = await $.store.get(keys.friction)
-  setSession({ friction: Array.isArray(log) ? (log as Friction[]) : [] })
+  // Legacy third-edit entries are dropped: a file under build is work, not friction (1.1).
+  setSession({ friction: realFriction(Array.isArray(log) ? (log as Friction[]) : []) })
   const stored = await $.store.get(keys.candidates)
   if (Array.isArray(stored)) await update($, candidatesAtom, () => stored as Candidate[])
 }
@@ -523,14 +576,56 @@ async function fileCandidates($: any, now: number, source: string): Promise<void
 async function recurBarnacles($: any): Promise<void> {
   const keys = storeKeys(s.key)
   const stored = await $.store.get(keys.barnacles)
-  const existing: Barnacle[] = Array.isArray(stored) ? (stored as Barnacle[]) : []
+  const stored_: Barnacle[] = Array.isArray(stored) ? (stored as Barnacle[]) : []
+  // A scrubbed key's older friction is forgotten (/barnacles, 1.1): it grows back only from new friction.
+  const log = afterScrub(s.friction, asScrubbed(await $.store.get(keys.scrubbed)))
+  // A barnacle with no real friction behind it any more comes off (1.1, Bradley 2026-10-09:
+  // the third-edit barnacles were never friction), whether or not the pass runs.
+  const existing = stored_.filter(b => log.some(f => f.key === b.key))
   let next = existing
-  if (s.friction.length > 0) {
-    const r = await complete($, 'barnacles', recurPrompt(s.friction, existing))
+  if (log.length > 0) {
+    const r = await complete($, 'barnacles', recurPrompt(log, existing))
     if (r.isAnswered) next = mergeBarnacles(existing, parseRecur(r.text))
   }
   await $.store.set(keys.barnacles, next)
   await update($, barnaclesAtom, () => next)
+}
+
+/**
+ * Scrubs one barnacle (or every one, `key` null) off the shell: the list and the store lose
+ * it, and the key is stamped scrubbed so the next recurrence pass reads only friction logged
+ * after now (/barnacles, 1.1, Bradley 2026-10-09).
+ */
+async function scrubBarnacles($: any, key: string | null): Promise<void> {
+  const now = await $.clock.now()
+  const keys = storeKeys(s.key)
+  const list: Barnacle[] = await read($, barnaclesAtom)
+  const gone = key === null ? list : list.filter(b => b.key === key)
+  const next = scrub(list, key)
+  await update($, barnaclesAtom, () => next)
+  await $.store.set(keys.barnacles, next)
+  await $.store.set(keys.scrubbed, stampScrub(asScrubbed(await $.store.get(keys.scrubbed)), gone, now))
+}
+
+/**
+ * A scrubbed barnacle regrows the moment its friction is recorded again (Bradley, 2026-10-09:
+ * the scrub "hasn't worked properly" if it comes back, so say so): back on the shell with its
+ * old words, unspoken, its scrub lifted so the recurrence pass sees the whole history again.
+ */
+async function regrowBarnacles($: any, found: readonly Friction[]): Promise<void> {
+  if (found.length === 0) return
+  const keys = storeKeys(s.key)
+  const scrubbed = asScrubbed(await $.store.get(keys.scrubbed))
+  const shell: Barnacle[] = await read($, barnaclesAtom)
+  const back = found
+    .map(f => regrown(scrubbed, f))
+    .filter((b): b is Barnacle => b !== null && !shell.some(x => x.key === b.key))
+    .filter((b, i, all) => all.findIndex(x => x.key === b.key) === i)
+  if (back.length === 0) return
+  const next = [...shell, ...back]
+  await update($, barnaclesAtom, () => next)
+  await $.store.set(keys.barnacles, next)
+  await $.store.set(keys.scrubbed, back.reduce((acc, b) => unscrub(acc, b.key), scrubbed))
 }
 
 /** End of watch: the print into the open session log, the undone carried forward. */
@@ -747,7 +842,9 @@ async function recordRun($: any, e: any, ran: any): Promise<void> {
   const ids = newIds(now, classified.writes.length, 'w')
   const turnId = await read($, turnAtom)
   const subagent = agentId !== undefined
-  await update($, ledgerAtom, l => recordCall(l, { turnId, at: now, ids, classified, subagent }))
+  // An agent's writes ride the main turn's id, attributed to the agent so its report can claim them (1.1).
+  const by = subagent ? { agentId: String(agentId) } : {}
+  await update($, ledgerAtom, l => recordCall(l, { turnId, at: now, ids, classified, subagent, ...by }))
   const ledger = await read($, ledgerAtom)
   await update($, asksAtom, a => resolveStates(a, ledger))
   const seen: Observed = {
@@ -768,22 +865,58 @@ async function recordRun($: any, e: any, ran: any): Promise<void> {
       friction: found.reduce(noteFriction, s.friction),
       recent: [...s.recent, { tool, input, isError, at: now }].slice(-RECENT_CAP),
     })
+    await regrowBarnacles($, found)
   }
   await update($, activityAtom, a => touch(a, now))
+  // The watch follows the log the main loop itself writes, edits or reads (1.1); an agent's binds nothing.
+  if (!subagent && !isError) {
+    const logged = logTouch(tool, input, s.cwd, s.config.sessionsDir)
+    if (logged !== null) await bindTouch($, logged, now)
+  }
+}
+
+/** Asks called done on this claim and still unproved: put to Claude on the next prompt, once each. */
+function noteUnproved(asks: readonly Ask[], claimId: string): void {
+  const unproved = asks
+    .filter(a => a.state === 'claimed' && a.claimId === claimId && !s.nudged.includes(a.id))
+    .map(a => a.id)
+  if (unproved.length > 0) setSession({ nudge: [...new Set([...s.nudge, ...unproved])] })
 }
 
 async function afterTurn($: any, now: number, claimId: string | null, answer: string): Promise<void> {
   await syncGoals($, now)
   if (claimId !== null) {
     await matchAsks($, claimId, answer)
-    // Called done on this turn's claim, still unproved: put to Claude on the next prompt.
-    const unproved = (await read($, asksAtom))
-      .filter(a => a.state === 'claimed' && a.claimId === claimId && !s.nudged.includes(a.id))
-      .map(a => a.id)
-    if (unproved.length > 0) setSession({ nudge: [...new Set([...s.nudge, ...unproved])] })
+    noteUnproved(await read($, asksAtom), claimId)
   }
   await saveCarry($)
   await saveFriction($)
+}
+
+/**
+ * A subagent's final report (1.1, ruled 2026-10-09): a pale claim the main session must read
+ * back before it develops. Minted only for an agent this mod saw make a call; its asks are
+ * matched, and an unproved one put to Claude, exactly as for any claim.
+ */
+async function agentReport($: any, agentId: string, answer: string, now: number): Promise<void> {
+  const cid = newIds(now, 1, 'c')[0] ?? `c${now}`
+  let minted: string | null = null
+  await update($, ledgerAtom, l => {
+    const r = recordAgentTurn(l, { agentId, at: now, answer, id: cid })
+    minted = r.claim?.id ?? null
+    return r.ledger
+  })
+  const claimId: string | null = minted
+  if (claimId === null) return
+  const ledger = await read($, ledgerAtom)
+  await update($, asksAtom, a => resolveStates(a, ledger))
+  $.clock.after(0, () => afterAgentReport($, claimId, answer))
+}
+
+async function afterAgentReport($: any, claimId: string, answer: string): Promise<void> {
+  await matchAsks($, claimId, answer)
+  noteUnproved(await read($, asksAtom), claimId)
+  await saveCarry($)
 }
 
 /** A slash command's arguments can carry an ask (`/task fix the walker`); the command name cannot. */
@@ -817,7 +950,14 @@ export const register: Register = (on, options) => {
       sessionId: typeof sessionId === 'string' ? sessionId : '',
     })
     // The estate adapters (1.0): each off when its script is absent.
-    setSession({ adapters: await findAdapters($, e.cwd), usageDir: usageDir(await homeDir($)) })
+    const root = pluginRoot($)
+    const adapters = await findAdapters($, e.cwd, root)
+    setSession({ adapters, usageDir: usageDir(await homeDir($)) })
+    // With nothing to look from, the band says `estate: ?` rather than drawing the companion's
+    // own counts as if there were no estate (1.1): a lookup that could not run is not an absence.
+    if (adapters.ticket === null && s.config.ticketScript === '' && root === '') {
+      await update($, ticketAtom, () => UNAVAILABLE_TICKET)
+    }
     await $.command.register({ name: 'undone', description: 'Witness: every ask this watch - witnessed, pale or open' })
     await $.command.register({
       name: 'wrap',
@@ -826,6 +966,12 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'tackle',
       description: `Witness: put ${estate() ? `an ${ESTATE_TACKLE_SKILL}` : 'a'} run over the undone asks in the prompt box, to read and send`,
+    })
+    // The costume seam (1.1, Bradley 2026-10-09): a later organ dresses Phi through $.command.run.
+    await $.command.register({ name: 'wear', description: 'Witness: dress Phi - razor, compass, horns, or none' })
+    await $.command.register({
+      name: 'barnacles',
+      description: 'Witness: what the barnacles on the shell record, and scrub them off',
     })
     // A refused registration costs the confirm tool, never the rest of the start.
     const person = s.config.person
@@ -884,6 +1030,8 @@ export const register: Register = (on, options) => {
 
   on('tool.call', async ($, e: any, next) => {
     if (e.tool === CONFIRM_TOOL) {
+      // A report is a claim, never its own read-back (1.1): only the main session confirms.
+      if (e.agentId !== undefined) return { deny: SUBAGENT_CONFIRM }
       const { tool: _t, tool_use_id: _u, agentId: _a, ...input } = e
       return { result: await confirm($, input) }
     }
@@ -919,7 +1067,11 @@ export const register: Register = (on, options) => {
       if (row !== null) await appendUsage($, row).catch(() => undefined)
       if (e.agentId === undefined) setSession({ tackleTurn: false })
     }
-    if (e.agentId !== undefined) return done
+    // A subagent's own turn: its final report is a claim of its own (1.1).
+    if (e.agentId !== undefined) {
+      await agentReport($, String(e.agentId), String(e.answer ?? ''), now)
+      return done
+    }
     setSession({ lastAnswer: String(e.answer ?? '').slice(-MAX_PREVIOUS_CHARS) })
     const cid = newIds(now, 1, 'c')[0] ?? `c${now}`
     let claimId: string | null = null
@@ -964,10 +1116,34 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'tackle' }, async $ => ({ text: await tackle($) }))
 
+  // /wear razor|compass|horns|none: what Phi holds, until changed or the session ends (1.1).
+  on('command.run', { command: 'wear' }, async ($, e) => {
+    const costume = parseCostume(e.args)
+    if (costume === null) return { text: 'Usage: /wear razor | compass | horns | none' }
+    await update($, costumeAtom, () => costume)
+    return { text: costume === 'none' ? 'Phi wears nothing.' : `Phi wears the ${costume}.` }
+  })
+
+  // /barnacles: the problems the barnacles record, each with a scrub (1.1, Bradley 2026-10-09).
+  on('command.run', { command: 'barnacles' }, async $ => {
+    const list: Barnacle[] = await read($, barnaclesAtom)
+    if (list.length === 0) return { text: 'No barnacles on the shell: nothing has recurred across sessions.' }
+    await $.ui.open({ id: BARNACLES_PANE, title: 'Barnacles' })
+    return { text: `${list.length} barnacle${list.length === 1 ? '' : 's'} on the shell - the list is open in the Barnacles pane.` }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: BARNACLES_PANE }, async ($, e) => {
+    const list: Barnacle[] = await read($, barnaclesAtom)
+    const onScrub = (key: string) => scrubBarnacles($, key)
+    const onScrubAll = () => scrubBarnacles($, null)
+    return barnaclesTree($.ui.resolve(e), list, onScrub, onScrubAll)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const asks = await read($, asksAtom)
     const ledger = await read($, ledgerAtom)
-    const pale = ledger.claims.filter(c => c.state === 'pale')
+    // An agent's report is labelled as one (1.1).
+    const pale = ledger.claims.filter(c => c.state === 'pale').map(c => ({ ...c, text: claimLabel(c) }))
     const onDrop = (id: string) => update($, asksAtom, list => dropAsk(list, id))
     const onTackle = async () => $.ui.toast(await tackle($))
     return paneTree($.ui.resolve(e), e.viewport?.rows ?? 24, paneRows(asks), pale, onDrop, onTackle)
@@ -998,6 +1174,7 @@ export const register: Register = (on, options) => {
     const view = buildView({
       body: s.body,
       frameIndex: await read($, frameAtom),
+      costume: await read($, costumeAtom),
       ledger: await read($, ledgerAtom),
       asks: await read($, asksAtom),
       activity: await read($, activityAtom),

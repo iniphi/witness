@@ -35,6 +35,188 @@ function answerSql(on: any, sent: string[]): void {
   })
 }
 
+/** Write, Edit and Read beneath the plugin, each succeeding: a session binds its own log through them (1.1). */
+function fileTools(on: any): void {
+  for (const tool of ['Write', 'Edit', 'Read']) on('tool.call', { tool }, () => ({ result: { ok: true }, text: `${tool} ok` }))
+}
+
+// Session-log paths are built from parts: the export's leak test refuses a dated log path written whole.
+const LOGS = `${START.cwd}/.claude/sessions`
+const logAt = (name: string): string => `${LOGS}/${name}`
+
+/** The session writes its own log with the Write tool, and the watch binds to it (1.1). */
+async function writeLog($: any, name = '2026-10-08-1036.md'): Promise<void> {
+  await $.tool.call({ tool: 'Write', file_path: logAt(name), content: '# Session' } as any)
+}
+
+// The costume seam (Bradley, 2026-10-09): /wear dresses Phi in the band; a later organ
+// calls it through $.command.run. The razor reads \== ahead of the tentacle tip on screen.
+test('/wear dresses Phi, checks the word after it, and none undresses it (1.1)', async ($, on) => {
+  const clock = ticketWorld(on, null)
+  await start($)
+  await clock.advance(1)
+  const r: any = await $.command.run({ command: 'wear', args: 'razor' } as any)
+  expect(r.text).toEqual('Phi wears the razor.')
+  const ui = await mountBand($)
+  expect(await ui.find({ type: 'Text', text: /\\==~/ })).toBeDefined()
+  await ui.unmount()
+  const bad: any = await $.command.run({ command: 'wear', args: 'hat' } as any)
+  expect(String(bad.text)).toContain('Usage')
+  const still = await mountBand($)
+  expect(await still.find({ type: 'Text', text: /\\==~/ })).toBeDefined()
+  await still.unmount()
+  const off: any = await $.command.run({ command: 'wear', args: 'none' } as any)
+  expect(off.text).toEqual('Phi wears nothing.')
+  const after = await mountBand($)
+  expect(await after.findAll({ type: 'Text', text: /\\==~/ })).toEqual([])
+  await after.unmount()
+})
+
+// /barnacles (Bradley, 2026-10-09): what the barnacles record, and a scrub takes one off the
+// shell at once; the key is stamped so the next recurrence pass reads only newer friction.
+test('/barnacles lists what recurs, and a scrub takes the barnacle off the shell (1.1)', async ($, on) => {
+  const stored = [
+    { key: 'k1', text: 'register keeps needing a third edit.', spoken: true },
+    { key: 'k2', text: 'the write keeps being cancelled at the prompt.', spoken: false },
+  ]
+  // A store of its own, seeded with two barnacles for the project and the friction behind
+  // them (a barnacle with none behind it comes off at start), every write kept.
+  const store = new Map<string, unknown>([
+    ['barnacles:c:/work/proj', stored],
+    [
+      'friction:c:/work/proj',
+      [
+        { kind: 'tool-failure', key: 'k1', at: 10, detail: 'k1 failed twice in a row' },
+        { kind: 'cancelled-write', key: 'k2', at: 20, detail: 'write cancelled at the prompt' },
+      ],
+    ],
+  ])
+  const clock = mock.clock(on, { now: 1_000_000 })
+  on('store.get', (_$: any, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', (_$: any, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }))
+  on('tool.register', () => ({ value: undefined }))
+  on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  on('ui.open', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: JSON.stringify({ barnacles: stored.map(b => ({ key: b.key, text: b.text })) }) } }))
+  await start($)
+  await clock.advance(1)
+  const r: any = await $.command.run({ command: 'barnacles', args: '' } as any)
+  expect(String(r.text)).toContain('2 barnacles')
+  const pane = await $.ui.mount({
+    plugin: 'witness',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'witness-barnacles',
+    props: { title: 'Barnacles', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { bodyRows: 20 } },
+  } as any)
+  expect(await pane.find({ type: 'Text', text: /third edit/ })).toBeDefined()
+  expect(await pane.find({ type: 'Button', key: 'scrub-k1' } as any)).toBeDefined()
+  await $.ui.press({ plugin: 'witness', key: 'scrub-k1' } as any)
+  await pane.unmount()
+  const again: any = await $.command.run({ command: 'barnacles', args: '' } as any)
+  expect(String(again.text)).toContain('1 barnacle on')
+  expect(store.get('barnacles:c:/work/proj')).toEqual([stored[1]])
+  expect(Object.keys((store.get('scrubbed:c:/work/proj') as Record<string, number> | undefined) ?? {})).toEqual(['k1'])
+  const band = await mountBand($)
+  expect(await band.find({ type: 'Text', text: /\*/ })).toBeDefined()
+  await band.unmount()
+})
+
+// Bradley, 2026-10-09: "if the friction occurs again it should be an instant barnacle".
+test('a scrubbed barnacle regrows at once when its friction is recorded again (1.1)', async ($, on) => {
+  const words = 'Bash keeps failing twice in a row.'
+  const store = new Map<string, unknown>([
+    ['barnacles:c:/work/proj', [{ key: 'Bash', text: words, spoken: true }]],
+    ['friction:c:/work/proj', [{ kind: 'tool-failure', key: 'Bash', at: 10, detail: 'Bash failed twice in a row' }]],
+  ])
+  const clock = mock.clock(on, { now: 1_000_000 })
+  on('model.complete', () => ({ value: { isAnswered: true, text: JSON.stringify({ barnacles: [{ key: 'Bash', text: words }] }) } }))
+  on('store.get', (_$: any, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', (_$: any, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }))
+  on('tool.register', () => ({ value: undefined }))
+  on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  on('ui.open', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '' }, text: 'column "to_agent" does not exist', isError: true }))
+  await start($)
+  await clock.advance(1)
+  const pane = await $.ui.mount({
+    plugin: 'witness',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'witness-barnacles',
+    props: { title: 'Barnacles', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { bodyRows: 20 } },
+  } as any)
+  await $.ui.press({ plugin: 'witness', key: 'scrub-Bash' } as any)
+  await pane.unmount()
+  expect(store.get('barnacles:c:/work/proj')).toEqual([])
+  expect((store.get('scrubbed:c:/work/proj') as any).Bash.text).toEqual(words)
+  // The same friction again: Bash fails twice in a row after the scrub.
+  await clock.advance(1_000)
+  await $.tool.call({ tool: 'Bash', command: 'psql -c "select 1"' } as any)
+  await clock.advance(1_000)
+  await $.tool.call({ tool: 'Bash', command: 'psql -c "select 2"' } as any)
+  expect(store.get('barnacles:c:/work/proj')).toEqual([{ key: 'Bash', text: words, spoken: false }])
+  expect(store.get('scrubbed:c:/work/proj')).toEqual({})
+  const band = await mountBand($)
+  expect(await band.find({ type: 'Text', text: /\*/ })).toBeDefined()
+  await band.unmount()
+})
+
+// Bradley, 2026-10-09: the third-edit barnacles were never friction. At session start a
+// barnacle with no real friction behind it comes off, and the stored third-edit entries go.
+test('at session start a barnacle with no real friction behind it comes off, and legacy third-edit friction is dropped (1.1)', async ($, on) => {
+  const store = new Map<string, unknown>([
+    [
+      'barnacles:c:/work/proj',
+      [
+        { key: 'c:/work/proj/a.ts', text: 'a.ts keeps needing a third edit.', spoken: true },
+        { key: 'Bash', text: 'Bash keeps failing twice in a row.', spoken: true },
+      ],
+    ],
+    [
+      'friction:c:/work/proj',
+      [
+        { kind: 're-edit', key: 'c:/work/proj/a.ts', at: 10, detail: 'third edit of c:/work/proj/a.ts' },
+        { kind: 'tool-failure', key: 'Bash', at: 20, detail: 'Bash failed twice in a row' },
+      ],
+    ],
+  ])
+  const clock = mock.clock(on, { now: 1_000_000 })
+  on('store.get', (_$: any, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', (_$: any, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }))
+  on('tool.register', () => ({ value: undefined }))
+  on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  on('ui.open', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: false }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '{"barnacles": [{"key": "Bash", "text": "Bash keeps failing twice in a row."}]}' } }))
+  await start($)
+  await clock.advance(1)
+  const shell = store.get('barnacles:c:/work/proj') as any[]
+  expect(shell.map(b => b.key)).toEqual(['Bash'])
+  const r: any = await $.command.run({ command: 'barnacles', args: '' } as any)
+  expect(String(r.text)).toContain('1 barnacle on')
+})
+
 test('a bare UPDATE is held, and Add RETURNING sends the CTE form', async ($, on) => {
   world(on)
   const asked: string[] = []
@@ -115,7 +297,12 @@ function unmeasuredWorld(on: any): any {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on, {
     'barnacles:c:/work/proj': [{ key: 'tool-failure:Bash', text: 'Bash failed twice in a row', spoken: false }],
+    // The friction behind it (1.1): a barnacle with none behind it comes off at start.
+    'friction:c:/work/proj': [{ kind: 'tool-failure', key: 'tool-failure:Bash', at: 10, detail: 'Bash failed twice in a row' }],
   })
+  on('model.complete', () => ({
+    value: { isAnswered: true, text: '{"barnacles": [{"key": "tool-failure:Bash", "text": "Bash failed twice in a row"}]}' },
+  }))
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: undefined }))
   on('tool.register', () => ({ value: undefined }))
@@ -324,7 +511,8 @@ function wrapWorld(
   on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
   on('ui.render', ($: any, e: any) => (o.beneath ? o.beneath($, e) : { type: 'engine', ref: 0 }))
   on('fs.exists', () => ({ value: o.hasLog !== false }))
-  on('fs.list', () => ({ value: [{ name: '2026-10-08-1036.md', kind: 'file', mtimeMs: DAY }] }))
+  // 1.1: no folder listing; the test binds its log with the Write tool (writeLog).
+  fileTools(on)
   on('fs.read', () => ({ value: o.log ?? '# Session: 2026-10-08 10:36\n\n## Goals\n- [ ] Add the photos pane\n' }))
   on('fs.write', (_$: any, e: any) => {
     writes.push({ path: String(e.path), text: String(e.text) })
@@ -344,6 +532,7 @@ test('/wrap writes the print, then hands it to the main session as a turn of its
   const submitted: string[] = []
   const w = wrapWorld(on, writes, submitted)
   await $.session.start(w.start)
+  await writeLog($)
   await w.clock.advance(1)
   const r: any = await $.command.run({ command: 'wrap', args: '' } as any)
   await w.clock.advance(1)
@@ -362,6 +551,7 @@ test('a sub-agent\'s failures are not the session\'s friction; the main session\
   const w = wrapWorld(on, writes, [])
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '' }, text: 'column "to_agent" does not exist', isError: true }))
   await $.session.start(w.start)
+  await writeLog($)
   await $.tool.call({ tool: 'Bash', command: 'psql -c select', agentId: 'ag1' } as any)
   await $.tool.call({ tool: 'Bash', command: 'psql -c select', agentId: 'ag2' } as any)
   await $.command.run({ command: 'wrap', args: '' } as any)
@@ -399,7 +589,7 @@ test('/tackle after a close leaves out what the triage dismissed or made a to-do
   on('tool.register', () => ({ value: undefined }))
   on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
   on('fs.exists', () => ({ value: true }))
-  on('fs.list', () => ({ value: [{ name: '2026-10-08-1054.md', kind: 'file', mtimeMs: DAY }] }))
+  fileTools(on)
   on('fs.read', () => ({ value: closed }))
   on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
   on('prompt.fill', (_$: any, e: any) => {
@@ -407,6 +597,8 @@ test('/tackle after a close leaves out what the triage dismissed or made a to-do
     return { isFilled: true }
   })
   await start($)
+  // The session's own log (1.1: bound by its Write), closed since with the triage in it.
+  await writeLog($, '2026-10-08-1054.md')
   await $.command.run({ command: 'tackle', args: '' } as any)
   expect(filled.length).toEqual(1)
   expect(filled[0]).toContain('Do the recording pass')
@@ -447,6 +639,8 @@ test('/close where the only session log is already closed hands the print over, 
   const log = '# Session: 2026-10-08 10:36\n\n## Goals\n- [x] Old goal\n\n## Session Closed\n'
   const w = wrapWorld(on, writes, [], true, { contexts, carry: [], log })
   await $.session.start(w.start)
+  // The session opened its log by reading it (1.1): bound, and already closed.
+  await $.tool.call({ tool: 'Read', file_path: logAt('2026-10-08-1036.md') } as any)
   await $.prompt.submit({ text: '/close --light', origin: { kind: 'composer' } } as any)
   const close = contexts[contexts.length - 1] ?? []
   expect(close.length).toEqual(1)
@@ -460,6 +654,7 @@ test('a note from beneath is recorded once in the print\'s Notes taken, under HE
   const beneath = ($: any, e: any) => $.ui.resolve(e).Text({ children: 'Heads up: try /fast' })
   const w = wrapWorld(on, writes, [], true, { beneath })
   await $.session.start(w.start)
+  await writeLog($)
   for (const _ of [1, 2]) {
     const ui = await mountBand($, 80)
     await ui.unmount()
@@ -475,6 +670,7 @@ test('/close writes the print but submits nothing: the close skill reads the log
   const submitted: string[] = []
   const w = wrapWorld(on, writes, submitted)
   await $.session.start(w.start)
+  await writeLog($)
   await $.prompt.submit({ text: '/close', origin: { kind: 'composer' } } as any)
   await w.clock.advance(1)
   expect(writes.some(x => x.text.includes('## Witness print'))).toEqual(true)
@@ -931,4 +1127,200 @@ test('a configured ticket script is run from the session folder, and only it', {
   await clock.advance(1)
   expect(argvs.map(a => a[1])).toEqual(['C:/work/proj/tools/ticket.py'])
   expect(estateRuns(argvs)).toEqual([])
+})
+
+// ---- 1.1: a subagent's final report is a claim the main session must read back (ruled 2026-10-09)
+
+const SRC = `${START.cwd}/src/walker.ts`
+
+/** A session with file tools and a band to draw: no estate, every fs write kept (1.1). */
+function agentWorld(on: any, writes: Array<{ path: string; text: string }> = []): any {
+  const clock = mock.clock(on, { now: DAY })
+  mock.store(on)
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: DAY } }))
+  on('command.register', () => ({ value: undefined }))
+  on('tool.register', () => ({ value: undefined }))
+  on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+  on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
+  on('fs.exists', (_$: any, e: any) => ({ value: String(e.path).replace(/\\/g, '/').startsWith(`${LOGS}/`) }))
+  on('fs.read', () => ({ value: '# Session\n\n## Goals\n' }))
+  on('fs.write', (_$: any, e: any) => {
+    writes.push({ path: String(e.path), text: String(e.text) })
+    return { value: undefined }
+  })
+  fileTools(on)
+  return clock
+}
+
+/** Mounts the band, looks for a text, unmounts. */
+async function bandHas($: any, pattern: RegExp): Promise<boolean> {
+  const ui = await mountBand($)
+  const found = (await ui.findAll({ type: 'Text', text: pattern })).length > 0
+  await ui.unmount()
+  return found
+}
+
+const agentWrites = ($: any, agentId: string): Promise<unknown> =>
+  $.tool.call({ tool: 'Write', file_path: SRC, content: 'fixed', agentId } as any)
+
+test("a subagent's done report is a pale claim: witnessed 0/1 on the band, a pale agent claim in the print", async ($, on) => {
+  const writes: Array<{ path: string; text: string }> = []
+  const clock = agentWorld(on, writes)
+  await start($)
+  await writeLog($)
+  await agentWrites($, 'ag1')
+  await $.turn.complete(turnEnd('Done: the walker is fixed in src/walker.ts.', { agentId: 'ag1' }) as any)
+  await clock.advance(1)
+  expect(await bandHas($, /witnessed 0\/1/)).toEqual(true)
+  await $.command.run({ command: 'wrap', args: '' } as any)
+  const print = writes.filter(w => w.text.includes('## Witness print')).pop()?.text ?? ''
+  expect(print).toContain('- pale agent claim: Done: the walker is fixed in src/walker.ts.')
+})
+
+test("only a main-session read-back develops an agent claim; the agent's own read leaves it pale", async ($, on) => {
+  const clock = agentWorld(on)
+  await start($)
+  await agentWrites($, 'ag1')
+  await $.turn.complete(turnEnd('Fixed the walker.', { agentId: 'ag1' }) as any)
+  await $.tool.call({ tool: 'Read', file_path: SRC, agentId: 'ag1' } as any)
+  await clock.advance(1)
+  expect(await bandHas($, /witnessed 0\/1/)).toEqual(true)
+  await $.tool.call({ tool: 'Read', file_path: SRC.replace(/\//g, '\\') } as any)
+  expect(await bandHas($, /witnessed 1\/1/)).toEqual(true)
+})
+
+test('no done-word, or an agent no call was seen from (an engine fork), mints no claim', async ($, on) => {
+  const clock = agentWorld(on)
+  await start($)
+  await agentWrites($, 'ag1')
+  await $.turn.complete(turnEnd('I read the walker and found where it breaks.', { agentId: 'ag1' }) as any)
+  await $.turn.complete(turnEnd('Memory updated.', { agentId: 'fork-1' }) as any)
+  await clock.advance(1)
+  expect(await bandHas($, /witnessed/)).toEqual(false)
+  expect(await bandHas($, /asks 0\/0/)).toEqual(true)
+})
+
+test("a report is never evidence: an Agent result or an agent's own output cannot confirm, nor can an agent", async ($, on) => {
+  const out = ' 175 pass\n 0 fail\nRan 175 tests across 13 files.'
+  confirmWorld(on, out)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { text: out }, text: out }))
+  await start($)
+  const item = { ask: 'Run the witness suite', evidence: [{ source: 'call', command: 'plugin test mods/witness', excerpt: '175 pass 0 fail' }] }
+  await $.tool.call({ tool: 'Agent', description: 'suite', prompt: 'Run claude plugin test mods/witness and report.' } as any)
+  const viaAgent: any = await $.tool.call({ tool: 'mcp__witness__confirm', items: [item] } as any)
+  expect(String(viaAgent.result)).toContain('NOT WITNESSED - Run the witness suite')
+  await $.tool.call({ tool: 'Bash', command: 'claude plugin test mods/witness', agentId: 'ag1' } as any)
+  const viaBash: any = await $.tool.call({ tool: 'mcp__witness__confirm', items: [item] } as any)
+  expect(String(viaBash.result)).toContain('NOT WITNESSED - Run the witness suite')
+  const byAgent: any = await $.tool.call({ tool: 'mcp__witness__confirm', items: [item], agentId: 'ag1' } as any)
+  expect(String(byAgent.deny)).toContain('a subagent may not confirm')
+  // The main session's own read-back still witnesses it.
+  await $.tool.call({ tool: 'Bash', command: 'claude plugin test mods/witness' } as any)
+  const own: any = await $.tool.call({ tool: 'mcp__witness__confirm', items: [item] } as any)
+  expect(String(own.result)).toContain('WITNESSED - Run the witness suite: witnessed')
+})
+
+// ---- 1.1: each watch bound to its own session's log (seen 2026-10-09: a side session took the
+// main session's Goals as its own asks and wrote its print into the main session's log)
+
+const OWN = '2026-10-09-1204.md'
+const OTHER = '2026-10-09-1730.md'
+const OWN_LOG = '# Session: own\n\n## Goals\n- [ ] Fix the band colour\n'
+const OTHER_LOG = "# Session: other\n\n## Goals\n- [ ] Rebuild the other session's pane\n- [ ] Ship the other session's report\n"
+
+/** Two open logs in one folder: this session's, and another session's with the newer name. */
+function logWorld(on: any, writes: Array<{ path: string; text: string }>, listed: string[]): any {
+  const clock = mock.clock(on, { now: DAY })
+  mock.store(on)
+  on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: DAY } }))
+  on('command.register', () => ({ value: undefined }))
+  on('tool.register', () => ({ value: undefined }))
+  on('settings.read', () => ({ value: { prefersReducedMotion: true } }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+  const slashed = (p: unknown): string => String(p).replace(/\\/g, '/')
+  on('fs.exists', (_$: any, e: any) => ({ value: slashed(e.path).startsWith(`${LOGS}/`) }))
+  on('fs.list', (_$: any, e: any) => {
+    listed.push(String(e.path))
+    return { value: [{ name: OTHER, kind: 'file', mtimeMs: DAY + 60_000 }, { name: OWN, kind: 'file', mtimeMs: DAY - 3_600_000 }] }
+  })
+  on('fs.read', (_$: any, e: any) => ({ value: slashed(e.path).endsWith(`/${OWN}`) ? OWN_LOG : OTHER_LOG }))
+  on('fs.write', (_$: any, e: any) => {
+    writes.push({ path: String(e.path), text: String(e.text) })
+    return { value: undefined }
+  })
+  fileTools(on)
+  return clock
+}
+
+const prints = (writes: Array<{ path: string; text: string }>) => writes.filter(w => w.text.includes('## Witness print'))
+
+test('two logs: the goals and the print follow the log this session wrote, not the newer one beside it', async ($, on) => {
+  const writes: Array<{ path: string; text: string }> = []
+  const listed: string[] = []
+  const clock = logWorld(on, writes, listed)
+  await start($)
+  // The engine hands the Write a Windows path, backslashes and all.
+  await $.tool.call({ tool: 'Write', file_path: logAt(OWN).replace(/\//g, '\\'), content: OWN_LOG } as any)
+  await clock.advance(1)
+  expect(await bandHas($, /asks 0\/1/)).toEqual(true)
+  await $.command.run({ command: 'wrap', args: '' } as any)
+  const printed = prints(writes)
+  expect(printed.map(w => w.path.replace(/\\/g, '/'))).toEqual([logAt(OWN)])
+  expect(printed[0]?.text).toContain('Asks: 0 of 1 witnessed, 0 pale, 1 open.')
+  expect(printed[0]?.text).toContain('- [ ] Fix the band colour')
+  expect(printed[0]?.text.includes("other session's")).toEqual(false)
+  expect(listed).toEqual([])
+})
+
+test('an unbound session follows no log: no goals, no print written, no folder listed', async ($, on) => {
+  const writes: Array<{ path: string; text: string }> = []
+  const listed: string[] = []
+  const clock = logWorld(on, writes, listed)
+  await start($)
+  await clock.advance(20_000)
+  expect(await bandHas($, /asks 0\/0/)).toEqual(true)
+  const r: any = await $.command.run({ command: 'wrap', args: '' } as any)
+  expect(String(r.text)).toContain('No open session log from this session')
+  expect(writes).toEqual([])
+  expect(listed).toEqual([])
+})
+
+test('an Edit of a log made before the session started binds it, in the Git Bash path form too', async ($, on) => {
+  const writes: Array<{ path: string; text: string }> = []
+  const clock = logWorld(on, writes, [])
+  await start($)
+  await $.tool.call({ tool: 'Edit', file_path: logAt(OWN).replace('C:/', '/c/'), old_string: '# Session', new_string: '# Session: resumed' } as any)
+  await clock.advance(1)
+  expect(await bandHas($, /asks 0\/1/)).toEqual(true)
+  await $.command.run({ command: 'wrap', args: '' } as any)
+  expect(prints(writes).map(w => w.path.replace(/\\/g, '/'))).toEqual([logAt(OWN)])
+})
+
+test('a Read of another log never displaces the log this session wrote', async ($, on) => {
+  const writes: Array<{ path: string; text: string }> = []
+  const clock = logWorld(on, writes, [])
+  await start($)
+  await $.tool.call({ tool: 'Write', file_path: logAt(OWN), content: OWN_LOG } as any)
+  await $.tool.call({ tool: 'Read', file_path: logAt(OTHER) } as any)
+  await clock.advance(1)
+  expect(await bandHas($, /asks 0\/1/)).toEqual(true)
+  await $.command.run({ command: 'wrap', args: '' } as any)
+  expect(prints(writes).map(w => w.path.replace(/\\/g, '/'))).toEqual([logAt(OWN)])
+})
+
+test("a subagent's Write of a session log binds nothing", async ($, on) => {
+  const writes: Array<{ path: string; text: string }> = []
+  const clock = logWorld(on, writes, [])
+  await start($)
+  await $.tool.call({ tool: 'Write', file_path: logAt(OWN), content: OWN_LOG, agentId: 'ag1' } as any)
+  await clock.advance(20_000)
+  expect(await bandHas($, /asks 0\/0/)).toEqual(true)
+  const r: any = await $.command.run({ command: 'wrap', args: '' } as any)
+  expect(String(r.text)).toContain('No open session log from this session')
+  expect(prints(writes)).toEqual([])
 })

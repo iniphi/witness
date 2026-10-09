@@ -2,7 +2,7 @@
 // hooks module's own file, so everything that calls `$` lives there; what can be
 // decided from plain data lives here, where tests reach it.
 
-import type { Ask, Ledger } from '../types'
+import type { Ask, Ledger, LogBinding, LogTouchKind } from '../types'
 import { PRINT_END, cleanText, counts } from './asks'
 import {
   DEFAULT_CLOSE_COMMANDS,
@@ -14,14 +14,11 @@ import {
   under,
 } from './config'
 import { CONFIRM_TOOL } from './evidence'
-import { paleCount } from './witness'
+import { normPath, paleCount } from './witness'
 
 export const HELPER_TIMEOUT_MS = 45_000
 export const SIDE_PASS = { model: 'haiku', effort: 'low', timeoutMs: 20_000 } as const
 export const PRINT_HEADING = '## Witness print'
-export const LOG_SCAN = 6
-/** A log touched this long before the session's start still counts (the log is opened just before). */
-export const LOG_GRACE_MS = 10 * 60_000
 
 let seq = 0
 
@@ -39,12 +36,20 @@ export function projectKey(cwd: string): string {
   return cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
-export function storeKeys(key: string): { carry: string; friction: string; barnacles: string; candidates: string } {
+export function storeKeys(key: string): {
+  carry: string
+  friction: string
+  barnacles: string
+  candidates: string
+  scrubbed: string
+} {
   return {
     carry: `carry:${key}`,
     friction: `friction:${key}`,
     barnacles: `barnacles:${key}`,
     candidates: `candidates:${key}`,
+    // When each barnacle key was last scrubbed off the shell (/barnacles, 1.1): epoch ms by key.
+    scrubbed: `scrubbed:${key}`,
   }
 }
 
@@ -58,22 +63,79 @@ export function askText(text: string): string {
   return cleanText(text)
 }
 
+// ---- the session log this watch follows (1.1) ----
+//
+// Until 1.1 the log was found by listing the sessions folder: every log touched since the
+// session started, newest name first, the first one not closed. Two sessions in one repo
+// then converged on the newest open log (seen 2026-10-09: a side session took the main
+// session's Goals as its own asks and wrote its print into the main session's log). Now
+// the watch binds to a log only by the main loop's own file calls.
+
+/** One session-log touch: the log's path as the fs takes it, and what touched it. */
+export type LogTouch = { path: string; by: LogTouchKind }
+
+const LOG_TOOLS: ReadonlyMap<string, LogTouchKind> = new Map([
+  ['Write', 'write'],
+  ['Edit', 'edit'],
+  ['Read', 'read'],
+])
+const LOG_RANK: Readonly<Record<LogTouchKind, number>> = { read: 1, edit: 2, write: 3 }
+
 /**
- * Session log names newest first (they are timestamped), at most LOG_SCAN, and only
- * those touched since this session started: a stale unclosed log, or another
- * project's, is not this session's (the Adversary found one unclosed for 17 days).
+ * A file call's path as the fs takes it: forward slashes, `.` and `..` resolved, relative
+ * under the session's folder, and on Windows Git Bash's `/c/x` as `C:/x`.
  */
-export function logCandidates(
-  entries: ReadonlyArray<{ name: string; kind: string; mtimeMs?: number }>,
-  startedAt: number,
-): string[] {
-  return entries
-    .filter(f => f.kind === 'file' && f.name.endsWith('.md'))
-    .filter(f => typeof f.mtimeMs !== 'number' || f.mtimeMs >= startedAt - LOG_GRACE_MS)
-    .map(f => f.name)
-    .sort()
-    .reverse()
-    .slice(0, LOG_SCAN)
+export function logPath(raw: string, cwd: string): string {
+  const slashed = raw.trim().replace(/\\/g, '/')
+  const windows = /^[A-Za-z]:/.test(cwd.trim())
+  const drive = windows ? slashed.replace(/^\/([A-Za-z])(?=\/|$)/, (_m: string, d: string) => `${d.toUpperCase()}:`) : slashed
+  return under(cwd, drive)
+}
+
+/** Two paths name one file: case, slashes and Git Bash's `/c/` aside (normPath). */
+export function sameFile(a: string, b: string): boolean {
+  return normPath(a) === normPath(b)
+}
+
+/**
+ * The session log a main-loop file call touched: a `.md` file directly under the sessions
+ * folder, by a Write (it created the log), an Edit or a Read (it opened one). Any other
+ * tool, a nested folder, another folder or another kind of file is null. The caller passes
+ * only the main loop's own calls that did not fail: a subagent's call binds nothing.
+ */
+export function logTouch(
+  tool: string,
+  input: Readonly<Record<string, unknown>>,
+  cwd: string,
+  dir: string = DEFAULT_SESSIONS_DIR,
+): LogTouch | null {
+  const by = LOG_TOOLS.get(tool)
+  const raw = input.file_path
+  if (by === undefined || typeof raw !== 'string' || raw.trim() === '') return null
+  const path = logPath(raw, cwd)
+  const cut = path.lastIndexOf('/')
+  if (cut <= 0 || !/.\.md$/i.test(path.slice(cut + 1))) return null
+  return sameFile(path.slice(0, cut), sessionsDir(cwd, dir)) ? { path, by } : null
+}
+
+/**
+ * The binding after one log touch. Unbound, the touch binds. The same log keeps the
+ * stronger touch. Another log displaces the binding only with a stronger touch (a Write
+ * outranks an Edit, which outranks a Read), or with a Write once the bound log is closed
+ * (a /task after a /close); so a Read of another log never displaces a Write. Returns
+ * `current` itself when nothing changes.
+ */
+export function bindLog(current: LogBinding | null, touch: LogTouch, at: number, boundOpen = true): LogBinding | null {
+  if (current === null) return { path: touch.path, by: touch.by, at }
+  const stronger = LOG_RANK[touch.by] > LOG_RANK[current.by]
+  if (sameFile(current.path, touch.path)) return stronger ? { ...current, by: touch.by, at } : current
+  if (stronger || (touch.by === 'write' && !boundOpen)) return { path: touch.path, by: touch.by, at }
+  return current
+}
+
+/** Whether bindLog's answer turns on the bound log being open: a Write of another log over a Write. */
+export function needsOpenCheck(current: LogBinding | null, touch: LogTouch): boolean {
+  return current !== null && current.by === 'write' && touch.by === 'write' && !sameFile(current.path, touch.path)
 }
 
 export function isOpenLog(text: string): boolean {

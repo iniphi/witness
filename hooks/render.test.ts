@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { TICKET_BAND_KEY, beneathText, bubbleWidth, fitWidth, splitBeneath, withCount } from './render'
+import { TICKET_BAND_KEY, beneathText, bubbleWidth, fitWidth, rowInks, splitBeneath, withCount } from './render'
 
 import { mirror } from './view'
 
@@ -89,6 +89,15 @@ test('withCount leaves a note untouched when its Dismiss is not in a row', () =>
   expect(withCount(column, text('<1/2>'))).toEqual({ tree: column, placed: false })
   expect(withCount(text('no controls'), text('<1/2>')).placed).toBe(false)
   expect(withCount(ENGINE, text('<1/2>'))).toEqual({ tree: ENGINE, placed: false })
+})
+
+test('rowInks: the chime and the barnacles take their inks, the eyes the warning colour only when metered (1.1)', () => {
+  const view: any = { bells: [[1, 13], [2, 13], [3, 13], [4, 13]], barnacles: [[1, 9]], eyes: [[2, 3]], costume: [[3, 2], [3, 1], [3, 0]] }
+  expect(rowInks(view, 1, false)).toEqual([{ col: 9, color: '#B59670' }, { col: 13, color: '#649090' }])
+  expect(rowInks(view, 2, true)).toEqual([{ col: 3, color: 'warning' }, { col: 13, color: '#649090' }])
+  expect(rowInks(view, 2, false)).toEqual([{ col: 13, color: '#649090' }])
+  expect(rowInks(view, 3, false)).toEqual([{ col: 0, color: 'error' }, { col: 1, color: 'error' }, { col: 2, color: 'error' }, { col: 13, color: '#649090' }])
+  expect(rowInks(view, 0, true)).toEqual([])
 })
 
 test('mirror turns the nautilus to face left, keeping every width', () => {

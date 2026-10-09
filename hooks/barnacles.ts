@@ -20,13 +20,13 @@ export function noteFriction(log: Friction[], f: Friction): Friction[] {
   return [...log, f].slice(-FRICTION_CAP)
 }
 
-const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit']
-
-function pathOf(input: unknown): string | null {
-  if (input === null || typeof input !== 'object') return null
-  const o = input as Record<string, unknown>
-  const p = o.file_path ?? o.path ?? o.notebook_path
-  return typeof p === 'string' && p !== '' ? p.toLowerCase().replace(/\\/g, '/') : null
+/**
+ * Friction worth keeping (Bradley, 2026-10-09): a cancelled or refused write, a failing call,
+ * an MCP misuse. Editing a file under build is the work itself, never friction, so the
+ * third-edit kind is retired and its legacy entries are dropped on load.
+ */
+export function realFriction(log: Friction[]): Friction[] {
+  return log.filter((f) => f.kind !== 're-edit')
 }
 
 /** The Supabase dialog's own answer when a write is declined, and nothing else (no row data). */
@@ -43,28 +43,28 @@ function cancelled(c: FrictionInput, at: number): Friction[] {
   return [{ kind: 'cancelled-write', key: c.tool, at, detail }]
 }
 
-function repeatedFailure(c: FrictionInput, at: number): Friction[] {
+/** The first line of an error, cut short, for a friction's detail. */
+const gist = (text: string): string => text.replace(/\s+/g, ' ').trim().slice(0, 80)
+
+/**
+ * A failing call. An MCP tool's error counts at once (a wrong column, a bad id, a misused
+ * server: a misremembering, Bradley 2026-10-09); any other tool's counts on its second
+ * failure in a row, since a shell command that fails once is often exploration.
+ */
+function callFailure(c: FrictionInput, at: number): Friction[] {
   if (!c.isError) return []
+  if (c.tool.startsWith('mcp__')) return [{ kind: 'tool-failure', key: c.tool, at, detail: `${c.tool} failed: ${gist(c.resultText)}` }]
   const last = [...c.recent].reverse().find((r) => r.tool === c.tool)
   if (last === undefined || !last.isError) return []
   return [{ kind: 'tool-failure', key: c.tool, at, detail: `${c.tool} failed twice in a row` }]
 }
 
-function reEdit(c: FrictionInput, at: number): Friction[] {
-  if (c.isError || !EDIT_TOOLS.includes(c.tool)) return []
-  const path = pathOf(c.input)
-  if (path === null) return []
-  const earlier = c.recent.filter(
-    (r) => !r.isError && EDIT_TOOLS.includes(r.tool) && pathOf(r.input) === path,
-  ).length
-  if (earlier !== 2) return []
-  return [{ kind: 're-edit', key: path, at, detail: `third edit of ${path}` }]
-}
-
 export function frictionFrom(c: FrictionInput): Friction[] {
   const newest = c.recent.length > 0 ? c.recent[c.recent.length - 1]?.at ?? 0 : 0
   const at = c.at ?? newest
-  return [...cancelled(c, at), ...repeatedFailure(c, at), ...reEdit(c, at)]
+  // A cancelled or refused write is a refusal, never also a failing call.
+  const refused = cancelled(c, at)
+  return refused.length > 0 ? refused : callFailure(c, at)
 }
 
 const day = (at: number): string => new Date(at).toISOString().slice(0, 10)
@@ -82,7 +82,7 @@ export function recurPrompt(log: Friction[], barnacles: Barnacle[]): string {
   )
   const known = barnacles.map((b) => `- ${b.key}: ${b.text}`)
   return [
-    'You read a log of friction an AI coding assistant hit (cancelled writes, repeated tool failures, files edited three times).',
+    'You read a log of friction an AI coding assistant hit (cancelled or refused writes, failing calls, MCP tool errors).',
     'Keep only friction that recurs: the same key on 2 or more distinct days. Drop the rest, and drop any known barnacle whose key no longer recurs.',
     'For each kept key write one plain sentence saying what keeps going wrong. Reuse the key exactly.',
     `At most ${MAX_BARNACLES} entries. Output shape: {"barnacles": [{"key": "...", "text": "..."}]}`,
@@ -117,6 +117,60 @@ export function mergeBarnacles(existing: Barnacle[], parsed: Barnacle[]): Barnac
     const known = existing.find((e) => e.key === p.key)
     return { ...p, spoken: known?.spoken ?? false }
   })
+}
+
+/** A scrub on record: when the key came off the shell, and what its barnacle said, so it can regrow at once. */
+export type ScrubRecord = { at: number; text: string }
+/** The scrubs on record, by barnacle key. */
+export type Scrubbed = Readonly<Record<string, ScrubRecord>>
+
+/** A stored scrub record; a bare number (the first cut's shape) is a scrub with no words kept. */
+export function asScrubbed(v: unknown): Scrubbed {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return {}
+  const out: Record<string, ScrubRecord> = {}
+  for (const [k, rec] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof rec === 'number') out[k] = { at: rec, text: '' }
+    else if (rec !== null && typeof rec === 'object' && typeof (rec as ScrubRecord).at === 'number') {
+      const text = (rec as ScrubRecord).text
+      out[k] = { at: (rec as ScrubRecord).at, text: typeof text === 'string' ? text : '' }
+    }
+  }
+  return out
+}
+
+/**
+ * The friction the recurrence pass may read after a scrub (/barnacles, 1.1): a scrubbed key
+ * forgets everything logged at or before its scrub. (New friction on that key regrows the
+ * barnacle at once through `regrown`, which also lifts the scrub.)
+ */
+export function afterScrub(log: Friction[], scrubbed: Scrubbed): Friction[] {
+  return log.filter((f) => f.at > (scrubbed[f.key]?.at ?? Number.NEGATIVE_INFINITY))
+}
+
+/** The shell without the barnacle `key` (every barnacle when `key` is null); a new list. */
+export function scrub(barnacles: Barnacle[], key: string | null): Barnacle[] {
+  return key === null ? [] : barnacles.filter((b) => b.key !== key).map((b) => ({ ...b }))
+}
+
+/** The scrub record with each of `gone` stamped `at`, its words kept for the regrowth; a new object. */
+export function stampScrub(scrubbed: Scrubbed, gone: readonly Barnacle[], at: number): Scrubbed {
+  return gone.reduce<Record<string, ScrubRecord>>((acc, b) => ({ ...acc, [b.key]: { at, text: b.text } }), { ...scrubbed })
+}
+
+/**
+ * The barnacle that regrows the moment friction `f` lands on a scrubbed key after its scrub
+ * (Bradley, 2026-10-09: "if the friction occurs again it should be an instant barnacle"):
+ * the old words, unspoken so it speaks again. Null when nothing regrows.
+ */
+export function regrown(scrubbed: Scrubbed, f: Friction): Barnacle | null {
+  const rec = scrubbed[f.key]
+  if (rec === undefined || f.at <= rec.at) return null
+  return { key: f.key, text: rec.text !== '' ? rec.text : `${f.detail}, again after a scrub.`, spoken: false }
+}
+
+/** The scrub record without `key`: a regrown barnacle's whole history is in view again. */
+export function unscrub(scrubbed: Scrubbed, key: string): Scrubbed {
+  return Object.fromEntries(Object.entries(scrubbed).filter(([k]) => k !== key))
 }
 
 export function nextToSpeak(barnacles: Barnacle[]): Barnacle | null {

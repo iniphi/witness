@@ -61,6 +61,28 @@ export function normNotionId(raw: string): string | null {
   return notionIds(raw)[0] ?? null
 }
 
+/** Most targets one report is read for; the rest are ignored. */
+export const MAX_NAMED = 12
+const URL_RE = /\bhttps?:\/\/\S+/gi
+// A path names at least one folder and ends in a file with an extension; a space ends it.
+const PATH_RE = /(?:[A-Za-z]:[\\/]|\/)?(?:[\w.@~-]+[\\/])+[\w@~-][\w.@~-]*\.[A-Za-z0-9]{1,8}(?![\w\\/])/g
+// A table in the workspace or public schema; a call (`schema.fn(`) is not a table.
+const TABLE_RE = /\b(?:workspace|public)\.[a-z_][a-z0-9_]*\b(?!\s*\()/gi
+
+/**
+ * The targets a subagent's report names (1.1), read conservatively: file paths with a folder
+ * and an extension, `workspace.` or `public.` tables, Notion page ids. A report resting on no
+ * write the ledger knows develops only when the main loop reads one of these back.
+ */
+export function namedTargets(text: string): Touch[] {
+  const raw = String(text ?? '')
+  const notion = notionIds(raw).map((id): Touch => ({ kind: 'notion', target: id }))
+  const prose = raw.replace(URL_RE, ' ')
+  const files = (prose.match(PATH_RE) ?? []).map((p): Touch => ({ kind: 'file', target: normPath(p) }))
+  const tables = (prose.match(TABLE_RE) ?? []).map((t): Touch => ({ kind: 'sql', target: t.toLowerCase() }))
+  return dedupe([...files, ...tables, ...notion]).slice(0, MAX_NAMED)
+}
+
 /** True when `path` sits beneath directory `dir` (segment boundary respected). */
 export function isUnder(path: string, dir: string): boolean {
   return dir.length > 0 && path.startsWith(dir.endsWith('/') ? dir : `${dir}/`)

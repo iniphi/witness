@@ -34,13 +34,55 @@ test('quiet: the compact sprite and no speech box', () => {
 // are after the creature is turned to face its bubble.
 test('the eye cells follow the creature when it is mirrored to face left', () => {
   const right = buildView(base)
-  expect(right.eyes).toEqual([[2, 8]])
+  expect(right.eyes).toEqual([[2, 10]])
   const left = buildView({ ...base, facing: 'left' })
   expect(left.eyes).toEqual([[2, 3]])
   for (const [r, c] of left.eyes) expect(Array.from(left.sprite[r] ?? '')[c]).toEqual('o')
   const phial = buildView({ ...base, body: 'phial', facing: 'left' })
   expect(phial.eyes).toEqual([[2, 8], [2, 5]])
   for (const [r, c] of phial.eyes) expect(Array.from(phial.sprite[r] ?? '')[c]).toEqual('o')
+})
+
+// The chime and the barnacles take their own inks (1.1), so the band must know their cells
+// as drawn, turned with the creature the way the eyes are.
+test('the chime and the barnacles report their cells as drawn, mirrored with the creature', () => {
+  const one = [{ key: 'k', text: 't', spoken: false }]
+  const right = buildView({ ...base, barnacles: one })
+  expect(right.bells).toEqual([[1, 0], [2, 0], [3, 0]])
+  expect(right.barnacles).toEqual([[1, 4]])
+  const left = buildView({ ...base, facing: 'left', barnacles: [...one, { key: 'j', text: 't', spoken: false }] })
+  expect(left.bells).toEqual([[1, 13], [2, 13], [3, 13]])
+  for (const [r, c] of left.bells) expect('●○◐◑').toContain(Array.from(left.sprite[r] ?? '')[c]!)
+  // Half an hour of active time: the bottom bell, on the tentacle row, shows a half turned with the creature.
+  const half = buildView({ ...base, facing: 'left', activity: { activeMs: 30 * 60_000, lastAt: 900 } })
+  expect(Array.from(half.sprite[3] ?? '')[13]).toEqual('◑')
+  expect(Array.from(half.sprite[2] ?? '')[13]).toEqual('○')
+  expect(Array.from(half.sprite[4] ?? '')[13]).toEqual(' ')
+  expect(left.barnacles).toEqual([[1, 9], [1, 5]])
+  for (const [r, c] of left.barnacles) expect(Array.from(left.sprite[r] ?? '')[c]).toEqual('*')
+  expect(buildView(base).barnacles).toEqual([])
+})
+
+test('a costume dresses the compact Phi, none undresses it, and Phial wears nothing (1.1)', () => {
+  const bare = buildView({ ...base, facing: 'left' })
+  const razor = buildView({ ...base, facing: 'left', costume: 'razor' })
+  expect(razor.sprite[3]!.startsWith('\\==')).toBe(true)
+  expect(razor.sprite.filter((r, i) => r !== bare.sprite[i]).length).toEqual(1)
+  for (const row of razor.sprite) expect(Array.from(row).length).toEqual(14)
+  const horns = buildView({ ...base, facing: 'left', costume: 'horns' })
+  expect(horns.sprite[0]).toContain('6')
+  expect(horns.sprite[0]).not.toContain('9')
+  const compass = buildView({ ...base, facing: 'left', costume: 'compass' })
+  expect(compass.sprite[3]).toContain('(<+)')
+  expect(compass.eyes).toEqual(bare.eyes)
+  // The costume's cells as drawn, so the band can ink them red: the razor's three cells at the row's left edge.
+  expect([...razor.costume].sort((a, b) => a[1] - b[1])).toEqual([[3, 0], [3, 1], [3, 2]])
+  for (const [r, c] of razor.costume) expect('\\=').toContain(Array.from(razor.sprite[r] ?? '')[c]!)
+  expect(bare.costume).toEqual([])
+  expect(buildView({ ...base, costume: 'razor' }).costume.map(([, c]) => c).sort()).toEqual([11, 12, 13])
+  expect(buildView({ ...base, facing: 'left', costume: 'none' }).sprite).toEqual(bare.sprite)
+  const phial = buildView({ ...base, body: 'phial', facing: 'left' })
+  expect(buildView({ ...base, body: 'phial', facing: 'left', costume: 'razor' }).sprite).toEqual(phial.sprite)
 })
 
 test('a full moment shows the full sprite when the band has room', () => {
@@ -116,7 +158,7 @@ test('every sprite row keeps its exact width whatever the state', () => {
   for (const body of ['phi', 'phial'] as const) {
     for (const speech of [null, FULL]) {
       const v = buildView({ ...base, body, speech, barnacles: [{ key: 'k', text: 't', spoken: false }] })
-      const width = v.size === 'full' ? 28 : 12
+      const width = v.size === 'full' ? 28 : 14
       for (const row of v.sprite) expect(row.length).toEqual(width)
     }
   }

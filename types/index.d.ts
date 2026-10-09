@@ -5,6 +5,11 @@ export type Body = 'phi' | 'phial'
 export type Size = 'full' | 'compact'
 export type Mood = 'calm' | 'resting' | 'alert' | 'shielding' | 'doubtful' | 'proud'
 
+/** A prop Phi can hold or wear: a costume for a later organ (FAMILY.md, 2026-10-09). */
+export type Prop = 'razor' | 'compass' | 'horns'
+/** What Phi wears now; set by the /wear command, `none` by default. */
+export type Costume = Prop | 'none'
+
 /** What the speech box says. `full` asks for the full sprite (one of the four moments). */
 export type Speech = {
   /** Header in the box's top border: YOU SHOULD KNOW, HELD, WATCH S161 -> S162, PRINT. */
@@ -48,6 +53,8 @@ export type Write = Touch & {
   turnId: string
   at: number
   witnessed: boolean
+  /** Set when a subagent made the write (1.1): it rides the main turn's id, and is attributed here. */
+  agentId?: string
 }
 
 export type Claim = {
@@ -58,6 +65,15 @@ export type Claim = {
   at: number
   writeIds: string[]
   state: 'pale' | 'developed'
+  /**
+   * Set on a subagent's final report (1.1): that agent's id, and the claim's turnId is
+   * `agent:<id>`. Such a claim is pale at birth and develops only on the main loop's read-back.
+   */
+  agentId?: string
+  /** An agent claim's write ids that no main-loop read has covered since the report. */
+  unread?: string[]
+  /** An agent claim resting on no known write: targets its report names; one main-loop read of one develops it. */
+  names?: Touch[]
 }
 
 export type TurnStat = { calls: number; reads: number; writes: number }
@@ -66,6 +82,23 @@ export type Ledger = {
   writes: Write[]
   claims: Claim[]
   turns: Record<string, TurnStat>
+  /** Tool calls seen per subagent id (1.1): a report from an agent that made none mints no claim. */
+  agents?: Record<string, number>
+}
+
+/** How a main-loop file call touched a session log: a Write created it, an Edit or a Read opened it. */
+export type LogTouchKind = 'write' | 'edit' | 'read'
+
+/**
+ * The session log this watch follows (1.1), bound by the main loop's own file calls, never
+ * found by listing the folder: two sessions in one repo no longer converge on the newest log.
+ */
+export type LogBinding = {
+  /** The log's path, forward slashes, as the fs is given it. */
+  path: string
+  /** The strongest touch so far: a Write outranks an Edit, which outranks a Read. */
+  by: LogTouchKind
+  at: number
 }
 
 export type AskState = 'open' | 'claimed' | 'witnessed' | 'dropped'
@@ -126,6 +159,7 @@ export type Friction = {
    * `let-through`: Bradley released a held bare write once (the spec's "logged to insights").
    * `returning-added`: he answered a hold with the RETURNING rewrite (S164: the third answer).
    */
+  /** `re-edit` (a third edit of one file) is retired since 1.1: a file under build is work, not friction; stored entries are dropped on load. */
   kind: 'cancelled-write' | 'tool-failure' | 're-edit' | 'let-through' | 'returning-added'
   /** What recurs: a tool name, a file path, a table. */
   key: string
@@ -228,6 +262,8 @@ declare module 'claude-code' {
       watch: Watch
       barnacles: Barnacle[]
       frame: number
+      /** The costume Phi wears this session (1.1); `none` until /wear sets one. */
+      costume: Costume
       /** The running turn's id, kept across a mid-turn hot reload so its writes stay in its claim. */
       turn: string
       /** The newest tool calls seen (capped), the evidence the confirm tool checks. */
@@ -244,6 +280,8 @@ declare module 'claude-code' {
       ticket: Ticket | null
       /** This session's Haiku side passes and what each cost (0.4.0). */
       usage: UsageRow[]
+      /** The session log this watch is bound to (1.1); null until the main loop touches one. */
+      log: LogBinding | null
     }
   }
 }

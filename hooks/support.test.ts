@@ -4,12 +4,16 @@ import type { Ask } from '../types'
 import {
   TACKLE_HEADER,
   WRAP_READ_HEADER,
+  bindLog,
   claimable,
   freshAsks,
   isCloseCommand,
   isTacklePrompt,
   isWrapReadPrompt,
-  logCandidates,
+  logPath,
+  logTouch,
+  needsOpenCheck,
+  sameFile,
   tacklePrompt,
   undone,
   withPrint,
@@ -79,15 +83,69 @@ test('tacklePrompt is null when nothing is undone', () => {
   expect(tacklePrompt([ask('a', 'x', 'witnessed'), ask('b', 'y', 'dropped')])).toBeNull()
 })
 
-test('logCandidates keeps only logs touched since the session started, newest first', () => {
-  const start = 1_000_000_000
-  const entries = [
-    { name: '2026-09-20-1748.md', kind: 'file', mtimeMs: start - 17 * 86_400_000 },
-    { name: '2026-10-07-1630.md', kind: 'file', mtimeMs: start + 60_000 },
-    { name: '2026-10-07-1146.md', kind: 'file', mtimeMs: start - 3 * 3_600_000 },
-    { name: 'notes.txt', kind: 'file', mtimeMs: start },
-  ]
-  expect(logCandidates(entries, start)).toEqual(['2026-10-07-1630.md'])
+// 1.1 retired logCandidates (the newest log touched since the start, found by listing the
+// folder): two sessions in one repo converged on one log. The watch now binds by its own calls.
+// Paths are built from parts: the export's leak test refuses a dated log path written whole.
+const CWD = 'C:/Work/Proj'
+const LOGS = `${CWD}/.claude/sessions`
+const logAt = (name: string): string => `${LOGS}/${name}`
+
+test('the watch binds to the log its own calls touched, never to the newest name in the folder', () => {
+  const own = bindLog(null, { path: logAt('s-0900.md'), by: 'write' }, 1)
+  expect(own).toEqual({ path: logAt('s-0900.md'), by: 'write', at: 1 })
+  expect(bindLog(own, { path: logAt('s-1700.md'), by: 'read' }, 2)).toBe(own)
+  expect(bindLog(own, { path: logAt('s-1700.md'), by: 'edit' }, 2)).toBe(own)
+  // A newer log written while this one is open is not followed; once this one is closed it is (a /task after a /close).
+  expect(bindLog(own, { path: logAt('s-1700.md'), by: 'write' }, 2, true)).toBe(own)
+  expect(bindLog(own, { path: logAt('s-1700.md'), by: 'write' }, 3, false)).toEqual({ path: logAt('s-1700.md'), by: 'write', at: 3 })
+})
+
+test('a stronger touch binds: a Write outranks an Edit, which outranks a Read; one log keeps its stronger touch', () => {
+  const read = bindLog(null, { path: logAt('a.md'), by: 'read' }, 1)
+  const edit = bindLog(read, { path: logAt('b.md'), by: 'edit' }, 2)
+  expect(edit).toEqual({ path: logAt('b.md'), by: 'edit', at: 2 })
+  expect(bindLog(edit, { path: logAt('c.md'), by: 'edit' }, 3)).toBe(edit)
+  expect(bindLog(edit, { path: logAt('a.md'), by: 'read' }, 3)).toBe(edit)
+  const same = bindLog(read, { path: logAt('a.md').replace(/\//g, '\\').toLowerCase(), by: 'write' }, 4)
+  expect(same).toEqual({ path: logAt('a.md'), by: 'write', at: 4 })
+  expect(bindLog(same, { path: logAt('a.md'), by: 'read' }, 5)).toBe(same)
+  expect(needsOpenCheck(same, { path: logAt('b.md'), by: 'write' })).toBe(true)
+  expect(needsOpenCheck(same, { path: logAt('a.md'), by: 'write' })).toBe(false)
+  expect(needsOpenCheck(edit, { path: logAt('a.md'), by: 'write' })).toBe(false)
+  expect(needsOpenCheck(null, { path: logAt('a.md'), by: 'write' })).toBe(false)
+})
+
+test('logTouch: a Write, Edit or Read of a .md directly under the sessions folder, in any path form', () => {
+  const touch = (tool: string, file_path: unknown) => logTouch(tool, { file_path }, CWD)
+  expect(touch('Write', logAt('s-main.md'))).toEqual({ path: logAt('s-main.md'), by: 'write' })
+  expect(touch('Edit', logAt('s-main.md').replace(/\//g, '\\'))).toEqual({ path: logAt('s-main.md'), by: 'edit' })
+  expect(touch('Read', logAt('s-main.md').toLowerCase())).toEqual({ path: logAt('s-main.md').toLowerCase(), by: 'read' })
+  expect(touch('Write', logAt('s-main.md').replace('C:/', '/c/'))).toEqual({ path: logAt('s-main.md'), by: 'write' })
+  expect(touch('Write', '.claude/sessions/s-main.md')).toEqual({ path: logAt('s-main.md'), by: 'write' })
+  expect(logTouch('Write', { file_path: `${CWD}/logs/s-main.md` }, CWD, 'logs')).toEqual({ path: `${CWD}/logs/s-main.md`, by: 'write' })
+})
+
+test('logTouch binds nothing for a nested folder, another folder, another kind of file or another tool', () => {
+  const touch = (tool: string, file_path: unknown) => logTouch(tool, { file_path }, CWD)
+  expect(touch('Write', `${LOGS}/old/s-main.md`)).toBeNull()
+  expect(touch('Write', `${CWD}/.claude/sessions-old/s-main.md`)).toBeNull()
+  expect(touch('Write', logAt('s-main.txt'))).toBeNull()
+  expect(touch('Write', logAt('.md'))).toBeNull()
+  expect(touch('Write', LOGS)).toBeNull()
+  expect(touch('Bash', logAt('s-main.md'))).toBeNull()
+  expect(touch('NotebookEdit', logAt('s-main.md'))).toBeNull()
+  expect(touch('constructor', logAt('s-main.md'))).toBeNull()
+  expect(touch('Write', 42)).toBeNull()
+  expect(touch('Write', '   ')).toBeNull()
+})
+
+test('logPath gives the fs a usable path; sameFile ignores case, slashes and the Git Bash form', () => {
+  expect(logPath('C:\\Work\\Proj\\x\\..\\a.md', CWD)).toEqual('C:/Work/Proj/a.md')
+  expect(logPath('/c/Work/Proj/a.md', CWD)).toEqual('C:/Work/Proj/a.md')
+  // Off Windows, /c/ is an ordinary folder.
+  expect(logPath('/c/work/a.md', '/home/u/proj')).toEqual('/c/work/a.md')
+  expect(sameFile('C:\\Work\\Proj\\a.md', '/c/work/proj/A.MD')).toBe(true)
+  expect(sameFile(logAt('a.md'), logAt('b.md'))).toBe(false)
 })
 
 test('withPrint replaces only up to the end marker, so notes after a first print survive', () => {

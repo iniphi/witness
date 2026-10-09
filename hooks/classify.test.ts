@@ -1,5 +1,31 @@
 import { test, expect } from 'claude-code/testing'
-import { classify, covers, isTestRun, isUnder, normNotionId, normPath, notionIds, rowCount } from './classify'
+import {
+  MAX_NAMED,
+  classify,
+  covers,
+  isTestRun,
+  isUnder,
+  namedTargets,
+  normNotionId,
+  normPath,
+  notionIds,
+  rowCount,
+} from './classify'
+
+// 1.1: what a subagent's report names, for a report that rests on no write the ledger knows.
+test('namedTargets reads paths with a folder and an extension, schema tables and Notion ids, conservatively', () => {
+  const id = '0123456789abcdef0123456789abcdef'
+  const report = `Done. Wrote C:\\Work\\Proj\\src\\a.ts and mods/witness/hooks/b.tsx; read workspace.todo_mirror, called workspace.close_todo(), page ${id}. See https://example.com/x/y.html, v1.2 and and/or. README.md alone names no folder.`
+  expect(namedTargets(report)).toEqual([
+    { kind: 'file', target: 'c:/work/proj/src/a.ts' },
+    { kind: 'file', target: 'mods/witness/hooks/b.tsx' },
+    { kind: 'sql', target: 'workspace.todo_mirror' },
+    { kind: 'notion', target: id },
+  ])
+  expect(namedTargets('Done, all good.')).toEqual([])
+  const many = Array.from({ length: MAX_NAMED + 5 }, (_, i) => `src/f${i}.ts`).join(' ')
+  expect(namedTargets(many)).toHaveLength(MAX_NAMED)
+})
 
 const call = (tool: string, input: Record<string, unknown>, resultText = '', isError = false, isReadOnly?: boolean) =>
   classify({ tool, input, resultText, isError, isReadOnly })

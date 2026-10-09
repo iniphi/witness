@@ -13,6 +13,7 @@ import {
   confirmReport,
   findAsk,
   inputText,
+  isReport,
   observe,
   parseItems,
   trimResult,
@@ -56,6 +57,25 @@ test('a command cannot manufacture its own proof: an excerpt that is in the inpu
   const echo = call({ input: 'echo "all items verified and done"', result: 'all items verified and done' })
   const e = { source: 'call' as const, command: 'echo', excerpt: 'all items verified and done' }
   expect(bearsOut(e, [echo], [], 100)).toBeNull()
+})
+
+// 1.1 (ruled 2026-10-09): a subagent's report is a claim the main session reads back, never evidence.
+test("a report is never evidence: an Agent, Task, TaskOutput or Workflow result, or a subagent's own call", () => {
+  const e = { source: 'call' as const, command: 'plugin test mods/witness', excerpt: '175 pass 0 fail' }
+  for (const tool of ['Agent', 'Task', 'TaskOutput', 'Workflow']) {
+    expect(bearsOut(e, [call({ tool, input: '{"prompt":"run claude plugin test mods/witness"}' })], [], 100)).toBeNull()
+  }
+  expect(bearsOut(e, [call({ agent: true })], [], 100)).toBeNull()
+  expect(bearsOut(e, [call({})], [], 100)).toEqual('t1')
+  expect(CONFIRM_DESCRIPTION).toContain("subagent's report")
+})
+
+test("observe keeps no subagent call: it could never be cited, and would crowd out the main loop's", () => {
+  expect(observe([], call({ agent: true }))).toEqual([])
+  expect(observe([], call({})).map(o => o.toolUseId)).toEqual(['t1'])
+  expect(isReport({ tool: 'Agent', agent: false })).toBe(true)
+  expect(isReport({ tool: 'Bash', agent: true })).toBe(true)
+  expect(isReport({ tool: 'Bash', agent: false })).toBe(false)
 })
 
 // Seen live (S163): an MCP result arrives JSON-encoded, so a quoted excerpt the model read

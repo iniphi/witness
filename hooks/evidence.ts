@@ -54,9 +54,26 @@ export function trimResult(text: string): string {
   return `${text.slice(0, RESULT_HEAD)}\n...\n${text.slice(-RESULT_TAIL)}`
 }
 
-/** Appends one observed call (never the confirm tool's own), newest kept. */
+/** Tools whose result is a subagent's report, or its launch notice (1.1). */
+export const REPORT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task', 'TaskOutput', 'Workflow'])
+
+/**
+ * A call whose output may never be cited (1.1, ruled 2026-10-09): a subagent's own call,
+ * or an Agent, Task, TaskOutput or Workflow result (a Workflow's result relays its agents'
+ * reports). A report is a claim the main session reads
+ * back, never the read-back itself.
+ */
+export function isReport(o: Pick<Observed, 'tool' | 'agent'>): boolean {
+  return o.agent || REPORT_TOOLS.has(o.tool)
+}
+
+/**
+ * Appends one observed call, newest kept. Never the confirm tool's own, and never a
+ * subagent's (1.1): nothing a subagent ran is evidence, so it would only push the main
+ * loop's read-backs out of the window.
+ */
 export function observe(log: readonly Observed[], o: Observed): Observed[] {
-  if (o.tool === CONFIRM_TOOL) return [...log]
+  if (o.tool === CONFIRM_TOOL || o.agent) return [...log]
   const kept: Observed = { ...o, input: o.input.slice(0, INPUT_CAP), result: trimResult(o.result) }
   return [...log, kept].slice(-OBSERVED_CAP)
 }
@@ -95,6 +112,7 @@ export function bearsOut(e: Evidence, observed: readonly Observed[], heard: read
       x.at >= since &&
       !x.isError &&
       x.tool !== CONFIRM_TOOL &&
+      !isReport(x) &&
       holds(x.input, command) &&
       holds(x.result, excerpt) &&
       !holds(x.input, excerpt),
@@ -270,7 +288,8 @@ export function confirmDescription(person: string): string {
   `or, for what only ${who} can witness (a layout), {source:"user", excerpt:<words ${who} typed>}. ` +
   `Only the first ${RESULT_HEAD} and last ${RESULT_TAIL} characters of an output are kept, ` +
   'so cite a short read-back (a grep or narrow query of the passage), never the middle of a long one. ' +
-  'Every citation must check out or the ask stays undone; a claim is not evidence. ' +
+  'Every citation must check out or the ask stays undone; a claim is not evidence, ' +
+  "nor is a subagent's report or its own calls (an Agent, Task or TaskOutput result): read back what it changed. " +
   `When ${who} called an ask off, pass outcome "dropped" with those words as {source:"user"} evidence: ` +
   'the ask is then neither done nor undone, and never carried. Never drop an ask on your own judgement.'
   )

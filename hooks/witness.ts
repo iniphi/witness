@@ -9,14 +9,19 @@
 // classify(), which marks such a write selfWitnessed.
 //
 // A wrong "developed" is the failure that matters: every rule here errs pale.
+//
+// A subagent's final report is a claim too (1.1, ruled 2026-10-09): pale at birth, it
+// develops only when the MAIN loop reads back what the agent wrote, so a Director that
+// only reads reports is held to the same rule as a model that says done.
 
-import type { Claim, Classified, Ledger, TurnStat, Write } from '../types'
-import { covers } from './classify'
+import type { Claim, Classified, Ledger, Touch, TurnStat, Write } from '../types'
+import { ALL_FILES, covers, isUnder, namedTargets } from './classify'
 
 export {
   classify,
   covers,
   isUnder,
+  namedTargets,
   normNotionId,
   normPath,
   notionIds,
@@ -27,15 +32,28 @@ export type { ToolCall } from './classify'
 export const MAX_WRITES = 500
 export const MAX_CLAIMS = 200
 export const MAX_TURNS = 500
+export const MAX_AGENTS = 200
 export const CLAIM_TEXT_MAX = 160
+/** The turn id an agent claim carries before the agent's id. */
+export const AGENT_TURN = 'agent:'
 
 /**
- * One tool call. `subagent`: the call ran inside a subagent - its writes are
- * recorded (unwitnessed, whatever classify said), its reads witness nothing, and
- * it does not count toward the turn's stats.
+ * One tool call. `subagent` (or an `agentId`): the call ran inside a subagent - its
+ * writes are recorded (unwitnessed, whatever classify said, and attributed to the
+ * agent when its id is known), its reads witness nothing, and it does not count
+ * toward the turn's stats.
  */
-export type CallRecord = { turnId: string; at: number; ids: string[]; classified: Classified; subagent?: boolean }
+export type CallRecord = {
+  turnId: string
+  at: number
+  ids: string[]
+  classified: Classified
+  subagent?: boolean
+  agentId?: string
+}
 export type TurnRecord = { turnId: string; at: number; answer: string; id: string }
+/** A subagent's final report: its own `turn.complete` (1.1). */
+export type AgentTurnRecord = { agentId: string; at: number; answer: string; id: string }
 
 const ZERO: TurnStat = { calls: 0, reads: 0, writes: 0 }
 
@@ -52,15 +70,57 @@ function witnessBy(w: Write, reads: Classified['reads']): Write {
 /**
  * A pale claim develops once every one of its writes is in the ledger AND
  * witnessed. A write the bound has dropped counts as unwitnessed: once the
- * unwitnessed writes pile past the bound, the oldest of them go too.
+ * unwitnessed writes pile past the bound, the oldest of them go too. An agent
+ * claim is left to readBack: a write witnessed before its report proves nothing
+ * about the report.
  */
 function develop(claims: Claim[], writes: Write[]): Claim[] {
   const witnessed = new Set(writes.filter((w) => w.witnessed).map((w) => w.id))
   return claims.map((c) =>
-    c.state === 'pale' && c.writeIds.length > 0 && c.writeIds.every((id) => witnessed.has(id))
+    c.state === 'pale' && c.agentId === undefined && c.writeIds.length > 0 && c.writeIds.every((id) => witnessed.has(id))
       ? { ...c, state: 'developed' as const }
       : c,
   )
+}
+
+const isAbsolutePath = (p: string): boolean => /^([a-z]:)?\//.test(p)
+
+/**
+ * Does this read reach a target a report named? The same target, or for a file a
+ * folder read above it, or (for a relative name) a path ending in it; never the `*`
+ * of a test run, which reads no named thing.
+ */
+export function readsName(read: Touch, name: Touch): boolean {
+  if (read.kind !== name.kind) return false
+  if (read.target === name.target) return true
+  if (name.kind !== 'file' || read.target === ALL_FILES) return false
+  return isAbsolutePath(name.target) ? isUnder(name.target, read.target) : read.target.endsWith(`/${name.target}`)
+}
+
+/**
+ * A pale agent claim's read-back: the reads of one MAIN-loop call, all made after the
+ * report. With writes, it develops once each has been covered by such a read (a
+ * dropped write never is); resting on none, once one target the report names is
+ * read; naming none, it stays pale.
+ */
+function readBack(claims: Claim[], reads: Classified['reads'], writes: Write[]): Claim[] {
+  if (reads.length === 0) return claims
+  const byId = new Map(writes.map((w) => [w.id, w]))
+  const covered = (id: string): boolean => {
+    const w = byId.get(id)
+    return w !== undefined && reads.some((r) => covers(r, w))
+  }
+  return claims.map((c) => {
+    if (c.agentId === undefined || c.state !== 'pale') return c
+    if (c.writeIds.length === 0) {
+      const named = (c.names ?? []).some((n) => reads.some((r) => readsName(r, n)))
+      return named ? { ...c, state: 'developed' as const } : c
+    }
+    const owed = c.unread ?? c.writeIds
+    const unread = owed.filter((id) => !covered(id))
+    if (unread.length === owed.length) return c
+    return unread.length === 0 ? { ...c, unread, state: 'developed' as const } : { ...c, unread }
+  })
 }
 
 function bumpTurn(turns: Ledger['turns'], turnId: string, reads: number, writes: number): Ledger['turns'] {
@@ -68,13 +128,20 @@ function bumpTurn(turns: Ledger['turns'], turnId: string, reads: number, writes:
   return { ...turns, [turnId]: { calls: t.calls + 1, reads: t.reads + reads, writes: t.writes + writes } }
 }
 
+function countAgent(agents: Ledger['agents'], agentId: string): Record<string, number> {
+  const all = agents ?? {}
+  return { ...all, [agentId]: (all[agentId] ?? 0) + 1 }
+}
+
 /** Record one tool call: add its writes, witness earlier writes its reads cover, develop claims. */
 export function recordCall(ledger: Ledger, rec: CallRecord): Ledger {
-  const sub = rec.subagent === true
+  const sub = rec.subagent === true || rec.agentId !== undefined
   // A subagent's unknown call is never an unwitnessable write: nothing could clear it.
   const writes = sub ? rec.classified.writes.filter((w) => w.kind !== 'other') : rec.classified.writes
   const reads = sub ? [] : rec.classified.reads
   const prior = ledger.writes.map((w) => witnessBy(w, reads))
+  // An agent's write still rides the main turn's id; it is attributed, so its report can claim it.
+  const by = rec.agentId === undefined ? {} : { agentId: rec.agentId }
   const added = writes.map(
     (w, i): Write => ({
       kind: w.kind,
@@ -83,13 +150,16 @@ export function recordCall(ledger: Ledger, rec: CallRecord): Ledger {
       turnId: rec.turnId,
       at: rec.at,
       witnessed: !sub && w.selfWitnessed,
+      ...by,
     }),
   )
   const all = [...prior, ...added]
+  const agents = rec.agentId === undefined ? ledger.agents : countAgent(ledger.agents, rec.agentId)
   return bound({
     writes: all,
-    claims: develop(ledger.claims, all),
+    claims: readBack(develop(ledger.claims, all), reads, all),
     turns: sub ? ledger.turns : bumpTurn(ledger.turns, rec.turnId, reads.length, writes.length),
+    ...(agents === undefined ? {} : { agents }),
   })
 }
 
@@ -169,9 +239,12 @@ export function claimText(answer: string): string {
   return answer.replace(/\s+/g, ' ').trim().slice(0, CLAIM_TEXT_MAX)
 }
 
-/** The latest claim made by another turn, or null. */
+/** The latest claim made by another main turn, or null. An agent's report is not the main loop's claim. */
 function previousClaim(claims: Claim[], turnId: string): Claim | null {
-  return claims.reduce<Claim | null>((p, c) => (c.turnId !== turnId && (p === null || c.at >= p.at) ? c : p), null)
+  return claims.reduce<Claim | null>(
+    (p, c) => (c.agentId === undefined && c.turnId !== turnId && (p === null || c.at >= p.at) ? c : p),
+    null,
+  )
 }
 
 /**
@@ -210,6 +283,45 @@ export function recordTurn(ledger: Ledger, rec: TurnRecord): { ledger: Ledger; c
   }
   const claims = [...ledger.claims.filter((c) => c.turnId !== rec.turnId), claim]
   return { ledger: bound({ ...ledger, claims }), claim }
+}
+
+/** The turn id of an agent's claim: one claim per agent, its latest report. */
+export function agentTurnId(agentId: string): string {
+  return `${AGENT_TURN}${agentId}`
+}
+
+/**
+ * A subagent's final report (1.1). Minted when the answer claims done AND the agent
+ * made at least one tool call this mod saw: the engine's own forks (compaction,
+ * memory) carry ids no list names, and their "Memory updated." is not a report.
+ * Pale at birth, even over writes already witnessed: it rests on that agent's own
+ * writes, each owed a main-loop read made after the report, or, resting on none, on
+ * the targets the report names. A later report from the same agent replaces it and
+ * keeps its id, so the asks riding on it stay linked.
+ */
+export function recordAgentTurn(ledger: Ledger, rec: AgentTurnRecord): { ledger: Ledger; claim: Claim | null } {
+  if ((ledger.agents?.[rec.agentId] ?? 0) === 0 || !isDoneClaim(rec.answer)) return { ledger, claim: null }
+  const turnId = agentTurnId(rec.agentId)
+  const writeIds = ledger.writes.filter((w) => w.agentId === rec.agentId).map((w) => w.id)
+  const prior = ledger.claims.find((c) => c.turnId === turnId)
+  const claim: Claim = {
+    id: prior?.id ?? rec.id,
+    turnId,
+    text: claimText(rec.answer),
+    at: rec.at,
+    writeIds,
+    state: 'pale',
+    agentId: rec.agentId,
+    unread: writeIds,
+    names: writeIds.length === 0 ? namedTargets(rec.answer) : [],
+  }
+  const claims = [...ledger.claims.filter((c) => c.turnId !== turnId), claim]
+  return { ledger: bound({ ...ledger, claims }), claim }
+}
+
+/** A claim as the pane names it: an agent's report says so (1.1). */
+export function claimLabel(c: Pick<Claim, 'text' | 'agentId'>): string {
+  return c.agentId === undefined ? c.text : `agent claim: ${c.text}`
 }
 
 /** What developByAsks needs of an ask: the claim it rides on and its state. */
@@ -261,11 +373,18 @@ function boundTurns(turns: Ledger['turns']): Ledger['turns'] {
   return Object.fromEntries(keys.slice(keys.length - MAX_TURNS).map((k) => [k, turns[k] as TurnStat]))
 }
 
-/** The ledger held to its bounds: 500 writes, 200 claims, 500 turns. */
+function boundAgents(agents: Record<string, number>): Record<string, number> {
+  const keys = Object.keys(agents)
+  if (keys.length <= MAX_AGENTS) return agents
+  return Object.fromEntries(keys.slice(keys.length - MAX_AGENTS).map((k) => [k, agents[k] as number]))
+}
+
+/** The ledger held to its bounds: 500 writes, 200 claims, 500 turns, 200 agents. */
 export function bound(ledger: Ledger): Ledger {
   return {
     writes: dropOldest(ledger.writes, MAX_WRITES, (w) => w.witnessed),
     claims: dropOldest(ledger.claims, MAX_CLAIMS, (c) => c.state === 'developed'),
     turns: boundTurns(ledger.turns),
+    ...(ledger.agents === undefined ? {} : { agents: boundAgents(ledger.agents) }),
   }
 }

@@ -1,11 +1,14 @@
 import { test, expect } from 'claude-code/testing'
-import { BELL_MS, BREAK_MS, bellsRung, isIdle, touch } from './bells'
+import { BELLS, BELL_MS, BREAK_MS, HALF_BELL_MS, MAX_HALVES, bellHalves, bellsRung, isIdle, touch } from './bells'
 
 const MIN = 60_000
 
-test('constants', () => {
+test('constants: a half bell is thirty minutes, a bell an hour, three bells on the chime', () => {
   expect(BREAK_MS).toEqual(5 * MIN)
-  expect(BELL_MS).toEqual(30 * MIN)
+  expect(HALF_BELL_MS).toEqual(30 * MIN)
+  expect(BELL_MS).toEqual(60 * MIN)
+  expect(BELLS).toEqual(3)
+  expect(MAX_HALVES).toEqual(6)
 })
 
 test('the first touch counts nothing and sets lastAt', () => {
@@ -26,13 +29,16 @@ test('touch does not mutate its argument', () => {
   expect(a).toEqual({ activeMs: 5, lastAt: 0 })
 })
 
-test('bellsRung is one per thirty active minutes, capped at four', () => {
-  expect(bellsRung({ activeMs: 0, lastAt: null })).toEqual(0)
-  expect(bellsRung({ activeMs: BELL_MS - 1, lastAt: 0 })).toEqual(0)
-  expect(bellsRung({ activeMs: BELL_MS, lastAt: 0 })).toEqual(1)
-  expect(bellsRung({ activeMs: 3 * BELL_MS + 5, lastAt: 0 })).toEqual(3)
-  expect(bellsRung({ activeMs: 4 * BELL_MS, lastAt: 0 })).toEqual(4)
-  expect(bellsRung({ activeMs: 40 * BELL_MS, lastAt: 0 })).toEqual(4)
+test('bellHalves is one per thirty active minutes, capped at six; bellsRung the whole hours, capped at three', () => {
+  expect(bellHalves({ activeMs: 0, lastAt: null })).toEqual(0)
+  expect(bellHalves({ activeMs: HALF_BELL_MS - 1, lastAt: 0 })).toEqual(0)
+  expect(bellHalves({ activeMs: HALF_BELL_MS, lastAt: 0 })).toEqual(1)
+  expect(bellHalves({ activeMs: 3 * HALF_BELL_MS + 5, lastAt: 0 })).toEqual(3)
+  expect(bellHalves({ activeMs: 6 * HALF_BELL_MS, lastAt: 0 })).toEqual(6)
+  expect(bellHalves({ activeMs: 40 * HALF_BELL_MS, lastAt: 0 })).toEqual(6)
+  expect(bellsRung({ activeMs: 3 * HALF_BELL_MS, lastAt: 0 })).toEqual(1)
+  expect(bellsRung({ activeMs: 4 * HALF_BELL_MS, lastAt: 0 })).toEqual(2)
+  expect(bellsRung({ activeMs: 40 * HALF_BELL_MS, lastAt: 0 })).toEqual(3)
 })
 
 test('isIdle needs a lastAt and more than five minutes since it', () => {
