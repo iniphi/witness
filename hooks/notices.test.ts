@@ -11,6 +11,7 @@ import {
   remove,
   settle,
   showing,
+  step,
   wrapLines,
 } from './notices'
 import type { NoticeInput } from './notices'
@@ -18,6 +19,47 @@ import type { NoticeInput } from './notices'
 const own = (text: string, until: number | null = null): NoticeInput => ({ kind: 'own', header: 'SAY', text, full: false, until })
 const held: NoticeInput = { kind: 'held', header: 'HELD', text: 'held write', full: true, until: null }
 const guest: NoticeInput = { kind: 'guest', header: 'GUEST', text: 'a guest', full: false, until: null }
+
+// 1.3.8 (Bradley, 2026-10-11: "the <n/m> the arrows don't switch between claims").
+test('step pages through what waits, both ways and round, and n follows the page', () => {
+  let q = enqueue(EMPTY_QUEUE, own('first'), 'o1', 100)
+  q = enqueue(q, own('second'), 'o2', 101)
+  q = enqueue(q, guest, 'g', 102)
+  expect(showing(q, false, 103)).toMatchObject({ n: 1, m: 3, pages: true })
+  q = step(q, false, 103, 1)
+  expect(showing(q, false, 103)).toMatchObject({ n: 2, m: 3 })
+  expect(showing(q, false, 103).notice?.id).toBe('o2')
+  q = step(step(q, false, 103, 1), false, 103, 1)
+  expect(showing(q, false, 103).notice?.id).toBe('o1')
+  q = step(q, false, 103, -1)
+  expect(showing(q, false, 103).notice?.id).toBe('g')
+})
+
+test('the engine\'s own note pages too, first; a held write pins the bubble and stops the pager', () => {
+  let q = enqueue(EMPTY_QUEUE, own('mine'), 'o1', 100)
+  expect(showing(q, true, 101)).toMatchObject({ notice: null, beneath: true, n: 1, m: 2, pages: true })
+  q = step(q, true, 101, 1)
+  expect(showing(q, true, 101)).toMatchObject({ beneath: false, n: 2, m: 2 })
+  expect(showing(q, true, 101).notice?.id).toBe('o1')
+  const held2 = enqueue(q, held, 'h', 102)
+  expect(showing(held2, true, 103)).toMatchObject({ pages: false })
+  expect(showing(held2, true, 103).notice?.id).toBe('h')
+  expect(step(held2, true, 103, 1)).toEqual(settle(held2, 103))
+})
+
+test('a dismiss takes the notice paged to; a page that has gone falls back to the head', () => {
+  let q = enqueue(EMPTY_QUEUE, own('first'), 'o1', 100)
+  q = enqueue(q, own('second'), 'o2', 101)
+  q = step(q, false, 102, 1)
+  q = dismiss(q, false, 102)
+  expect(q.items.map(n => n.id)).toEqual(['o1'])
+  expect(showing(q, false, 102)).toMatchObject({ n: 2, m: 2, pages: false })
+  expect(showing(q, false, 102).notice?.id).toBe('o1')
+  // One alone draws no pager.
+  expect(footerText(true, 2, 2, false)).toBe('0: Dismiss <2/2>')
+  // 1.4.1: the pager is the count's own brackets, so a paged footer reads the same as an unpaged one.
+  expect(footerText(true, 1, 2, true)).toBe('0: Dismiss <1/2>')
+})
 
 test('several arriving in one turn are all kept, ordered by priority then arrival', () => {
   let q = enqueue(EMPTY_QUEUE, guest, 'g', 100)
@@ -62,7 +104,7 @@ test('dismiss advances to the next and the count moves on: 1/3, 2/3, 3/3', () =>
   expect(countText(s3.n, s3.m)).toBe('<3/3>')
   q = dismiss(q, false, 7)
   expect(q).toEqual(EMPTY_QUEUE)
-  expect(showing(q, false, 7)).toEqual({ notice: null, beneath: false, n: 0, m: 0 })
+  expect(showing(q, false, 7)).toEqual({ notice: null, beneath: false, n: 0, m: 0, pages: false })
 })
 
 test('a held write cannot be dismissed, only answered (removed by id)', () => {

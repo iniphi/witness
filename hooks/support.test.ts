@@ -187,6 +187,32 @@ test('an ask the close triage made a to-do is not undone work, nor put into /tac
   expect(tacklePrompt([routed])).toEqual(null)
 })
 
+// 1.3.7 (ruled by Bradley 2026-10-11: "quoted, no ask"): an Ammonite heckle sent on with its
+// case is the Ammonite's words. Its last point says what to do and must never become his ask.
+const SENT_CASE = [
+  'The Ammonite objects: "Cutting the case as pasted text leaves the objection untracked."',
+  '**Untracked objections get silently dropped**',
+  '- **"Quoted, no ask"** records nothing from the case.',
+  '- Before relying on it, paste the heckle once and confirm it.',
+].join('\n')
+
+test('withoutQuoted cuts a sent Ammonite heckle and its case, keeping his own words around it', () => {
+  const alone = withoutQuoted(SENT_CASE)
+  expect(alone.includes('paste the heckle once')).toEqual(false)
+  expect(alone.includes('Untracked objections')).toEqual(false)
+  expect(alone).toContain("[the Ammonite's objection]")
+  const framed = withoutQuoted(`what do you make of this?\n${SENT_CASE}\nand please fix the README after`)
+  expect(framed).toContain('what do you make of this?')
+  expect(framed).toContain('please fix the README after')
+  expect(framed.includes('confirm it')).toEqual(false)
+  // The heckle alone (no case), his words after it on the same line.
+  const inline = withoutQuoted('The Ammonite objects: "It fails offline." and I agree, rethink the cache.')
+  expect(inline).toContain('and I agree, rethink the cache.')
+  expect(inline.includes('It fails offline')).toEqual(false)
+  // Without the prefix it is ordinary text.
+  expect(withoutQuoted('- Before relying on it, paste the heckle once.')).toContain('paste the heckle once')
+})
+
 // Seen live 2026-10-08 (Overseer S166): Bradley pasted 405_85labs' /tackle prompt to talk
 // about it, and the witness minted five of 85labs' asks as his asks in this session.
 test('withoutQuoted cuts pasted blocks and a quoted /tackle prompt, keeping his own words', () => {

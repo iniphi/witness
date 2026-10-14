@@ -53,7 +53,7 @@ export type CallRecord = {
 }
 export type TurnRecord = { turnId: string; at: number; answer: string; id: string }
 /** A subagent's final report: its own `turn.complete` (1.1). */
-export type AgentTurnRecord = { agentId: string; at: number; answer: string; id: string }
+export type AgentTurnRecord = { agentId: string; at: number; answer: string; id: string; schemas?: readonly string[] }
 
 const ZERO: TurnStat = { calls: 0, reads: 0, writes: 0 }
 
@@ -313,7 +313,7 @@ export function recordAgentTurn(ledger: Ledger, rec: AgentTurnRecord): { ledger:
     state: 'pale',
     agentId: rec.agentId,
     unread: writeIds,
-    names: writeIds.length === 0 ? namedTargets(rec.answer) : [],
+    names: writeIds.length === 0 ? namedTargets(rec.answer, rec.schemas) : [],
   }
   const claims = [...ledger.claims.filter((c) => c.turnId !== turnId), claim]
   return { ledger: bound({ ...ledger, claims }), claim }

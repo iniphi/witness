@@ -30,7 +30,7 @@ const LOG = [
   '- Type: Single project',
   '',
   '## Goals',
-  '- [ ] Build the witness companion mod v0.1 (Phi body) from the Notion spec, full v0.1 this session (Bradley\'s ruling) — link: https://www.notion.example/7a6b5c4d3e2f40118293a4b5c6d7e8f9',
+  '- [ ] Build the witness companion mod v0.1 (Naut body) from the Notion spec, full v0.1 this session (Bradley\'s ruling) — link: https://www.notion.example/7a6b5c4d3e2f40118293a4b5c6d7e8f9',
   '- [ ] Add the asks ledger to it: a done/undone tracker the watcher holds, n/m in the band, full list on a slash-command pane (Bradley: "so often the to-do list is not tracked anymore")',
   '- [x] Amend the Notion build spec with the asks ledger rulings — https://app.notion.example/p/0f1e2d3c4b5a49687786a5b4c3d2e1f0',
   '',

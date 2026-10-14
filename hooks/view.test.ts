@@ -63,7 +63,7 @@ test('the chime and the barnacles report their cells as drawn, mirrored with the
   expect(buildView(base).barnacles).toEqual([])
 })
 
-test('a costume dresses the compact Phi, none undresses it, and Phial wears nothing (1.1)', () => {
+test('a costume dresses the compact Naut, none undresses it, and Phial wears nothing (1.1)', () => {
   const bare = buildView({ ...base, facing: 'left' })
   const razor = buildView({ ...base, facing: 'left', costume: 'razor' })
   expect(razor.sprite[3]!.startsWith('\\==')).toBe(true)
@@ -85,21 +85,13 @@ test('a costume dresses the compact Phi, none undresses it, and Phial wears noth
   expect(buildView({ ...base, body: 'phial', facing: 'left', costume: 'razor' }).sprite).toEqual(phial.sprite)
 })
 
-test('a full moment shows the full sprite when the band has room', () => {
-  const v = buildView({ ...base, speech: FULL, maxRows: 12, bodyColumns: 70 })
-  expect(v.size).toEqual('full')
-  expect(v.sprite.length).toEqual(9)
-  expect(v.speech.length).toBeGreaterThan(0)
-  expect(v.speech.length).toBeLessThan(9)
-})
-
-test('the compact fallback below the row threshold and below the column threshold', () => {
-  const rows = buildView({ ...base, speech: FULL, maxRows: 11, bodyColumns: 120 })
-  expect(rows.size).toEqual('compact')
-  expect(rows.sprite.length).toEqual(5)
-  expect(rows.speech.length).toBeLessThan(5)
-  const cols = buildView({ ...base, speech: FULL, maxRows: 40, bodyColumns: 69 })
-  expect(cols.size).toEqual('compact')
+test('the companion is always the compact sprite, however much room the band has (full size removed, 1.3.9)', () => {
+  for (const [maxRows, bodyColumns] of [[12, 70], [40, 200], [11, 120], [40, 69]] as const) {
+    const v = buildView({ ...base, speech: FULL, maxRows, bodyColumns })
+    expect(v.size).toEqual('compact')
+    expect(v.sprite.length).toEqual(5)
+    expect(v.speech.length).toBeLessThan(5)
+  }
 })
 
 test('a held write turns on the safelight and speaks HELD over any other speech', () => {
@@ -158,8 +150,7 @@ test('every sprite row keeps its exact width whatever the state', () => {
   for (const body of ['phi', 'phial'] as const) {
     for (const speech of [null, FULL]) {
       const v = buildView({ ...base, body, speech, barnacles: [{ key: 'k', text: 't', spoken: false }] })
-      const width = v.size === 'full' ? 28 : 14
-      for (const row of v.sprite) expect(row.length).toEqual(width)
+      for (const row of v.sprite) expect(row.length).toEqual(14)
     }
   }
 })

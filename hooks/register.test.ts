@@ -49,15 +49,15 @@ async function writeLog($: any, name = '2026-10-08-1036.md'): Promise<void> {
   await $.tool.call({ tool: 'Write', file_path: logAt(name), content: '# Session' } as any)
 }
 
-// The costume seam (Bradley, 2026-10-09): /wear dresses Phi in the band; a later organ
+// The costume seam (Bradley, 2026-10-09): /wear dresses Naut in the band; a later organ
 // calls it through $.command.run. The razor reads \== ahead of the tentacle tip on screen.
 // The first test of the file pays the plugin's cold load: a budget for a loaded machine (S170).
-test('/wear dresses Phi, checks the word after it, and none undresses it (1.1)', { timeoutMs: 15_000 }, async ($, on) => {
+test('/wear dresses Naut, checks the word after it, and none undresses it (1.1)', { timeoutMs: 15_000 }, async ($, on) => {
   const clock = ticketWorld(on, null)
   await start($)
   await clock.advance(1)
   const r: any = await $.command.run({ command: 'wear', args: 'razor' } as any)
-  expect(r.text).toEqual('Phi wears the razor.')
+  expect(r.text).toEqual('Naut wears the razor.')
   const ui = await mountBand($)
   expect(await ui.find({ type: 'Text', text: /\\==~/ })).toBeDefined()
   await ui.unmount()
@@ -67,10 +67,39 @@ test('/wear dresses Phi, checks the word after it, and none undresses it (1.1)',
   expect(await still.find({ type: 'Text', text: /\\==~/ })).toBeDefined()
   await still.unmount()
   const off: any = await $.command.run({ command: 'wear', args: 'none' } as any)
-  expect(off.text).toEqual('Phi wears nothing.')
+  expect(off.text).toEqual('Naut wears nothing.')
   const after = await mountBand($)
   expect(await after.findAll({ type: 'Text', text: /\\==~/ })).toEqual([])
   await after.unmount()
+})
+
+// The body option (1.12.1): `naut` is the nautilus, `phi` its older name for the same body, `phial` the flask.
+// The razor is a nautilus-only costume, so it shows in the band for the nautilus and never on the flask.
+async function razorShows($: any, on: any): Promise<boolean> {
+  const clock = ticketWorld(on, null)
+  await start($)
+  await clock.advance(1)
+  await $.command.run({ command: 'wear', args: 'razor' } as any)
+  const ui = await mountBand($)
+  const found = (await ui.findAll({ type: 'Text', text: /\\==~/ })).length > 0
+  await ui.unmount()
+  return found
+}
+
+test('body naut draws the nautilus (1.12.1)', { options: { body: 'naut' } }, async ($, on) => {
+  expect(await razorShows($, on)).toBe(true)
+})
+
+test('an installed body phi still draws the same nautilus (1.12.1)', { options: { body: 'phi' } }, async ($, on) => {
+  expect(await razorShows($, on)).toBe(true)
+})
+
+test('body phial draws the flask, which wears no costume (1.12.1)', { options: { body: 'phial' } }, async ($, on) => {
+  expect(await razorShows($, on)).toBe(false)
+})
+
+test('an unknown body value draws the nautilus, as before the rename (1.12.1)', { options: { body: 'squid' } }, async ($, on) => {
+  expect(await razorShows($, on)).toBe(true)
 })
 
 // /barnacles (Bradley, 2026-10-09): what the barnacles record, and a scrub takes one off the
@@ -241,6 +270,62 @@ test('a held write that is cancelled never reaches the tool and tells the model 
   const r: any = await $.tool.call({ tool: SQL, project_id: 'p', query: BARE } as any)
   expect(sent).toEqual([])
   expect(String(r.deny ?? r.text)).toContain('RETURNING')
+})
+
+// 2026-10-11: the hold's tool is a config key with a neutral default.
+const OTHER_DB = 'mcp__acme_db__execute_sql'
+const ODD_DB = 'mcp__acme_db__run_query'
+
+function dbWorld(on: any, tool: string, sent: string[]): void {
+  world(on)
+  on('tool.call', { tool }, (_$: any, e: any) => {
+    sent.push(e.query)
+    return { result: [{ type: 'text', text: ROWS }], text: ROWS }
+  })
+}
+
+test('the default hold is not Supabase-only: any MCP tool ending __execute_sql is held', async ($, on) => {
+  const sent: string[] = []
+  const asked: string[] = []
+  dbWorld(on, OTHER_DB, sent)
+  answerAsk(on, 'Cancel', asked)
+  await start($)
+  await $.tool.call({ tool: OTHER_DB, query: BARE } as any)
+  expect(asked.length).toEqual(1)
+  expect(sent).toEqual([])
+})
+
+test('the default hold leaves a tool of another name alone', async ($, on) => {
+  const sent: string[] = []
+  const asked: string[] = []
+  dbWorld(on, ODD_DB, sent)
+  answerAsk(on, 'Cancel', asked)
+  await start($)
+  await $.tool.call({ tool: ODD_DB, query: BARE } as any)
+  expect(asked).toEqual([])
+  expect(sent).toEqual([BARE])
+})
+
+test('sqlTools names the tool the hold judges', { options: { sqlTools: 'mcp__acme_db__run_*' } }, async ($, on) => {
+  const sent: string[] = []
+  const asked: string[] = []
+  dbWorld(on, ODD_DB, sent)
+  answerAsk(on, 'Cancel', asked)
+  await start($)
+  await $.tool.call({ tool: ODD_DB, query: BARE } as any)
+  expect(asked.length).toEqual(1)
+  expect(sent).toEqual([])
+})
+
+test('with sqlTools set, the default name is no longer held', { options: { sqlTools: 'mcp__acme_db__run_*' } }, async ($, on) => {
+  const sent: string[] = []
+  const asked: string[] = []
+  dbWorld(on, OTHER_DB, sent)
+  answerAsk(on, 'Cancel', asked)
+  await start($)
+  await $.tool.call({ tool: OTHER_DB, query: BARE } as any)
+  expect(asked).toEqual([])
+  expect(sent).toEqual([BARE])
 })
 
 // S164 live: a hold answered Add RETURNING was noted nowhere, so the print's Notes taken
@@ -759,7 +844,7 @@ test('a SELECT-led writer function is never held', async ($, on) => {
   answerAsk(on, 'Cancel', asked)
   answerSql(on, sent)
   await start($)
-  await $.tool.call({ tool: SQL, project_id: 'p', query: "SELECT workspace.close_todo('abc', 'done')" } as any)
+  await $.tool.call({ tool: SQL, project_id: 'p', query: "SELECT app.finish_task('abc', 'done')" } as any)
   expect(asked).toEqual([])
   expect(sent.length).toEqual(1)
 })
@@ -828,7 +913,8 @@ test('two notices queue: one shown with <1/2>, Dismiss (key 0) advances to <2/2>
   await $.prompt.submit({ text: '/close', origin: { kind: 'composer' } } as any)
   const ui = await mountBand($)
   expect(await ui.find({ type: 'Text', text: /^Watch not measured\.$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /<1\/2>/ })).toBeDefined()
+  // Two pages: the count is drawn as `<` (a Button), `1/2`, `>` (a Button) since 1.4.1.
+  expect(await ui.find({ type: 'Text', text: /^1\/2$/ })).toBeDefined()
   const button = await ui.find({ type: 'Button', key: 'witness-dismiss' } as any)
   expect([button?.props.hotkey, button?.props.label]).toEqual(['0', 'Dismiss'])
   await $.ui.press({ plugin: 'witness', key: 'witness-dismiss' } as any)
@@ -837,6 +923,48 @@ test('two notices queue: one shown with <1/2>, Dismiss (key 0) advances to <2/2>
   expect(await after.findAll({ type: 'Text', text: /^Watch not measured\.$/ })).toEqual([])
   expect(await after.find({ type: 'Text', text: /<2\/2>/ })).toBeDefined()
   await after.unmount()
+})
+
+// 1.3.8 (Bradley, 2026-10-11: "the <n/m> the arrows don't switch between claims"): the queue pages.
+// 1.4.1 (Bradley, same day: "the 4: < and 5: > are very confusing ... use directly the < of <n/m>
+// as a button"): the < and > of the count ARE the buttons, pressed by a click, with no hotkey.
+test('the pager: the count\'s > shows the next notice and its < the one before, nothing dismissed', async ($, on) => {
+  const clock = ticketWorld(on, null)
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+  await start($)
+  await clock.advance(1)
+  await $.prompt.submit({ text: '/close', origin: { kind: 'composer' } } as any)
+  const ui = await mountBand($)
+  const first = await ui.find({ type: 'Text', text: /^Watch not measured\.$/ })
+  expect(first).toBeDefined()
+  const next = await ui.find({ type: 'Button', key: 'witness-next' } as any)
+  const prev = await ui.find({ type: 'Button', key: 'witness-prev' } as any)
+  expect([prev?.props.label, next?.props.label]).toEqual(['<', '>'])
+  expect([prev?.props.hotkey, next?.props.hotkey]).toEqual([undefined, undefined])
+  expect(await ui.find({ type: 'Text', text: /^1\/2$/ })).toBeDefined()
+  await $.ui.press({ plugin: 'witness', key: 'witness-next' } as any)
+  await ui.unmount()
+  const paged = await mountBand($)
+  expect(await paged.findAll({ type: 'Text', text: /^Watch not measured\.$/ })).toEqual([])
+  expect(await paged.find({ type: 'Text', text: /^2\/2$/ })).toBeDefined()
+  await $.ui.press({ plugin: 'witness', key: 'witness-prev' } as any)
+  await paged.unmount()
+  const back = await mountBand($)
+  expect(await back.find({ type: 'Text', text: /^Watch not measured\.$/ })).toBeDefined()
+  expect(await back.find({ type: 'Text', text: /^1\/2$/ })).toBeDefined()
+  await back.unmount()
+})
+
+test('no 4 or 5 hotkey anywhere on the band while the queue pages (1.4.1)', async ($, on) => {
+  const clock = ticketWorld(on, null)
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+  await start($)
+  await clock.advance(1)
+  await $.prompt.submit({ text: '/close', origin: { kind: 'composer' } } as any)
+  const ui = await mountBand($)
+  const buttons = (await ui.findAll({ type: 'Button' } as any)) as any[]
+  expect(buttons.map(b => b?.props?.hotkey).filter(k => k === '4' || k === '5')).toEqual([])
+  await ui.unmount()
 })
 
 // Bradley's one line (S162), now drawn by the witness alone: the estate ticket cut to
@@ -868,7 +996,8 @@ const warned = async (ui: any): Promise<string[]> =>
 test('a METERED repo colours the eyes, not the line', async ($, on) => {
   const clock = ticketWorld(on, quietJson('METERED'))
   await start($)
-  await clock.advance(1)
+  // The lamp test (1.7) shows the whole creature red for 1.5 s at start; the eyes take their own ink after it.
+  await clock.advance(1_500)
   const ui = await mountBand($)
   expect(await ui.find({ type: 'Text', text: /Code to-dos 7 \u00b7 asks 0\/0/ })).toBeDefined()
   expect(await ui.findAll({ type: 'Text', text: /push|METERED/ })).toEqual([])
@@ -895,6 +1024,29 @@ test('the ticket is read from estate-status.py for this project, and again every
   expect(estate()[0]?.slice(-3)).toEqual(['--json', '--project-dir', 'C:/work/proj'])
   await clock.advance(10 * 60_000)
   expect(estate().length).toEqual(2)
+})
+
+// 1.3.6 (Bradley, 2026-10-11, a screenshot): at a start the band often showed neither the ticket
+// nor `estate: ?`. A prompt with a ticket showing reads nothing more; when the session id moves
+// (a resumed conversation, F9) the ticket is read again at once, not ten minutes later.
+test('the ticket is read again when the session id moves, and a prompt with one showing reads nothing more', async ($, on) => {
+  const argvs: string[][] = []
+  let id = 'tmp-000000'
+  const clock = ticketWorld(on, estateJson('UNMETERED'), argvs)
+  on('session.id', () => ({ value: id }))
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '{"asks": []}' } }))
+  await start($)
+  await clock.advance(1)
+  const estate = () => argvs.filter(a => a.some(x => x.endsWith(ESTATE_HELPER_NAME))).length
+  expect(estate()).toEqual(1)
+  await $.prompt.submit({ text: 'carry on', origin: { kind: 'composer' } } as any)
+  await clock.advance(1)
+  expect(estate()).toEqual(1)
+  id = 'res-222222'
+  await $.prompt.submit({ text: 'carry on', origin: { kind: 'composer' } } as any)
+  await clock.advance(1)
+  expect(estate()).toEqual(2)
 })
 
 test('a ticket that cannot be read shows as estate ?, never as zeros, and the counts stay', async ($, on) => {
@@ -1039,7 +1191,7 @@ test('the confirm tool refuses evidence the mod never observed', async ($, on) =
 
 // Seen live (S162), seven times: with nothing drawing beneath, next(e) is the engine's
 // own node, and an engine node under a Box with a width is refused - the whole band
-// (Phi and the ticket) went blank whenever no Heads up was showing.
+// (Naut and the ticket) went blank whenever no Heads up was showing.
 test('with only the engine beneath, the band still draws (no engine node under a width)', async ($, on) => {
   world(on)
   on('ui.render', () => ({ type: 'engine', ref: 0 }))

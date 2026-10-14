@@ -4,11 +4,11 @@
 // as a chime at the creature's back, the side away from its face, one per row from the
 // second row down (his live look: "one rung down"), with one blank column from the shell.
 // The band mirrors the art, so the back is the LEFT edge here and the right edge on screen.
-// The compact sprite is 14 columns for the chime; the full sprite keeps 28 by shifting the
-// art two columns right. Phi's shell top is low lines with an undertie wave (.__‿_., the
+// The sprite is 14 columns for the chime (the full-size 28-column sprite was removed in 1.3.9).
+// Naut's shell top is low lines with an undertie wave (.__‿_., the
 // wave keeping the three animation positions) and its rim overlines with the tie ⁀ under
 // the wave, its mirror image, moving with it. Phial carries the same chime; its base is
-// plain. The props are masks over Phi's compact frame, ported from the ammonite
+// plain. The props are masks over Naut's compact frame, ported from the ammonite
 // lab: razor \== and compass (<+) on the tentacle row, horn tips 6 and 6 on the shell's
 // corners. Each mask is stored facing right like the art, so the compass is (+>) here and
 // the horns 9 9: the band's mirror turns them. Preview outside Claude Code with
@@ -23,17 +23,12 @@ type PerFrame = Cell[][]
 type Table<T> = Record<Body, Record<Size, T>>
 
 /**
- * Three animation frames per body and size: full 9 rows x 28, compact 5 rows x 14. The
+ * Three animation frames per body: 5 rows x 14. The
  * props follow as one-frame compact masks (spaces except their glyphs), which is how the
  * preview tool tells a prop from a body.
  */
 export const FRAMES: Table<Frames> & Record<Prop, { compact: Frames }> = {
   phi: {
-    full: [
-      ['      .________.            ', '    .\'  .__‿_.  \'.          ', '○  /  .\' .-. \'.  \\          ', '○ |  /  ( @ )  \\  |/\'o\\     ', '○ |  \\   \'-\'   /  |\\__/~~~  ', '   \\  \'-.__.-\'   /)))~~~~   ', '    \'.          .\'))~~~ ~   ', '       ‾‾‾‾⁀‾‾‾   ~ ~~ ~    ', '                   ~  ~     '],
-      ['      .________.            ', '    .\'  .__‿_.  \'.          ', '○  /  .\' .-. \'.  \\          ', '○ |  /  ( @ )  \\  |/\'-\\     ', '○ |  \\   \'-\'   /  |\\__/-~~  ', '   \\  \'-.__.-\'   /)))-~~~   ', '    \'.          .\'))~~~ ~   ', '       ‾‾‾‾⁀‾‾‾    ~ ~~ ~   ', '                   ~  ~     '],
-      ['      .________.            ', '    .\'  ._‿__.  \'.          ', '○  /  .\' .-. \'.  \\          ', '○ |  /  ( @ )  \\  |/\'o\\     ', '○ |  \\   \'-\'   /  |\\__/≈≈~  ', '   \\  \'-.__.-\'   /)))≈~~~   ', '    \'.          .\'))~~~ ~   ', '       ‾‾‾⁀‾‾‾‾   ~ ~~ ~    ', '                  ~  ~ ~    '],
-    ],
     compact: [
       ['   .__‿_.     ', '○  / .-. \\    ', '○ | ( @ ) o>~ ', '○  \\ `-\' /~   ', '    ‾‾⁀‾‾     '],
       ['   .__‿_.     ', '○  / .-. \\    ', '○ | ( @ ) ->- ', '○  \\ `-\' /-   ', '    ‾‾⁀‾‾     '],
@@ -41,11 +36,6 @@ export const FRAMES: Table<Frames> & Record<Prop, { compact: Frames }> = {
     ],
   },
   phial: {
-    full: [
-      ['      |~~~~|      o         ', '      |    |    o           ', '○     |    |   .            ', '○    /      \\               ', '○  /   o  o   \\             ', '  |     ‿‿     |            ', '  |~~~~~~~~~~~~|            ', '   \\          /             ', '    `--------\'              '],
-      ['      |~~~~|    o           ', '      |    |   .            ', '○     |  o |                ', '○    /      \\               ', '○  /   -  -   \\             ', '  |     ‿‿     |            ', '  |~~~~~~~~~~~~|            ', '   \\          /             ', '    `--------\'              '],
-      ['      |~~~~|                ', '      | o  |      o         ', '○     |    |    o           ', '○    /      \\               ', '○  /   o  o   \\             ', '  |     ‿‿     |            ', '  |~-~~~~~~~-~~|            ', '   \\          /             ', '    `--------\'              '],
-    ],
     compact: [
       ['     |~~|     ', '○    |  |     ', '○  / o  o \\   ', '○ (  ~‿‿~  )  ', '   `------\'   '],
       ['     |~~|     ', '○    | o|     ', '○  / -  - \\   ', '○ (  ~‿‿~  )  ', '   `------\'   '],
@@ -60,7 +50,7 @@ export const FRAMES: Table<Frames> & Record<Prop, { compact: Frames }> = {
   },
   compass: {
     compact: [
-      // '(<+)' on screen, its closing bracket taking the tentacle's tip (GRIP) so Phi holds it.
+      // '(<+)' on screen, its closing bracket taking the tentacle's tip (GRIP) so Naut holds it.
       ['              ', '              ', '              ', '          (+>)', '              '],
     ],
   },
@@ -73,21 +63,19 @@ export const FRAMES: Table<Frames> & Record<Prop, { compact: Frames }> = {
   devil: {
     compact: [
       // The horns /(_‿__)\ over the shell top (1.3): the two corner dots and the blank cell
-      // outside each. Stored facing right; the band's mirror turns it. Worn by Phi for one
+      // outside each. Stored facing right; the band's mirror turns it. Worn by Naut for one
       // draw while a guest drawing stands narrow above the band, never by /wear's atom alone.
       ['  /(    )\\    ', '              ', '              ', '              ', '              '],
     ],
   },
 }
 
-/** Eye cells per frame ([row, col]); Phi has one, Phial two (left then right). */
+/** Eye cells per frame ([row, col]); Naut has one, Phial two (left then right). */
 const EYES: Table<PerFrame> = {
   phi: {
-    full: [[[3, 21]], [[3, 21]], [[3, 21]]],
     compact: [[[2, 10]], [[2, 10]], [[2, 10]]],
   },
   phial: {
-    full: [[[4, 7], [4, 10]], [[4, 7], [4, 10]], [[4, 7], [4, 10]]],
     compact: [[[2, 5], [2, 8]], [[2, 5], [2, 8]], [[2, 5], [2, 8]]],
   },
 }
@@ -99,11 +87,9 @@ const EYES: Table<PerFrame> = {
  */
 const BELLS: Table<PerFrame> = {
   phi: {
-    full: [[[2, 0], [3, 0], [4, 0]], [[2, 0], [3, 0], [4, 0]], [[2, 0], [3, 0], [4, 0]]],
     compact: [[[1, 0], [2, 0], [3, 0]], [[1, 0], [2, 0], [3, 0]], [[1, 0], [2, 0], [3, 0]]],
   },
   phial: {
-    full: [[[2, 0], [3, 0], [4, 0]], [[2, 0], [3, 0], [4, 0]], [[2, 0], [3, 0], [4, 0]]],
     compact: [[[1, 0], [2, 0], [3, 0]], [[1, 0], [2, 0], [3, 0]], [[1, 0], [2, 0], [3, 0]]],
   },
 }
@@ -111,17 +97,53 @@ const BELLS: Table<PerFrame> = {
 /** Interior cells that are spaces in all three frames, in fill order. */
 const BARNACLES: Table<Cell[]> = {
   phi: {
-    full: [[2, 8], [2, 12], [4, 6], [4, 14]],
     compact: [[1, 4], [1, 8], [3, 4], [3, 8]],
   },
   phial: {
-    full: [[1, 7], [1, 10], [2, 7], [2, 10]],
     compact: [[3, 3], [3, 4], [3, 9], [3, 10]],
   },
 }
 
+/** The three extents of the safelight blush (1.7): the rim, then the shell's walls, then its top. */
+export type BlushPart = 'rim' | 'walls' | 'top'
+
 /**
- * The tentacle tip a held prop may take: the compass's bracket sits here so Phi grips it.
+ * The shell cells the blush may redden, per body, as drawn (facing right). Read off the frames:
+ * the same non-space glyphs in all three, none a barnacle or gem cell, a bell or an eye, and
+ * never the coil. Naut: the rim under the wave, the side strokes `/ \ | \ /`, the top `.__‿_.`.
+ */
+const BLUSH: Table<Record<BlushPart, Cell[]>> = {
+  phi: {
+    compact: {
+      rim: [[4, 4], [4, 5], [4, 6], [4, 7], [4, 8]],
+      walls: [[1, 3], [1, 9], [2, 2], [3, 3], [3, 9]],
+      top: [[0, 3], [0, 4], [0, 5], [0, 6], [0, 7], [0, 8]],
+    },
+  },
+  phial: {
+    compact: {
+      rim: [[4, 3], [4, 4], [4, 5], [4, 6], [4, 7], [4, 8], [4, 9], [4, 10]],
+      walls: [[1, 5], [1, 8], [2, 3], [2, 10], [3, 2], [3, 11]],
+      top: [[0, 5], [0, 6], [0, 7], [0, 8]],
+    },
+  },
+}
+
+/** The parts of the shell a rung reddens: 1 the rim, 2 the rim and walls, 3 the rim, walls and top. */
+export const BLUSH_PARTS: Readonly<Record<1 | 2 | 3, readonly BlushPart[]>> = {
+  1: ['rim'],
+  2: ['rim', 'walls'],
+  3: ['rim', 'walls', 'top'],
+}
+
+/** The cells a rung reddens, as drawn (facing right); a rung outside 1 to 3 reddens nothing. */
+export function blushCellsOf(body: Body, size: Size, rung: number): Cell[] {
+  const parts = BLUSH_PARTS[rung as 1 | 2 | 3] ?? []
+  return parts.flatMap((p) => copyCells(BLUSH[body][size][p]))
+}
+
+/**
+ * The tentacle tip a held prop may take: the compass's bracket sits here so Naut grips it.
  * The only tentacle cell any prop replaces.
  */
 export const GRIP: Cell = [3, 10]
@@ -221,6 +243,56 @@ export function withBarnacles(rows: string[], body: Body, size: Size, count: num
   return put(rows, cells, cells.map(() => '*'))
 }
 
+/** What waits on the shell: barnacles, and the hook and skill candidates not yet settled. */
+export type DecorCounts = { barnacles: number; hooks: number; skills: number }
+
+/** The cells each kind of decoration got, as drawn (facing right). */
+export type Decor = { barnacles: Cell[]; hooks: Cell[]; skills: Cell[] }
+
+/** The gem: a bright faceted diamond, symmetric, so the band's mirror leaves it alone. */
+export const GEM = '◈'
+
+const wholeCount = (n: number): number => Math.max(0, Math.trunc(Number.isFinite(n) ? n : 0))
+
+/**
+ * How the shell's four decoration cells are shared (1.5, Bradley 2026-10-11): barnacles and the
+ * candidate gems use the same cells. Every kind present first gets one cell (three kinds at most,
+ * so it always fits); the cells left go to barnacles, then hooks, then skills, each up to its own
+ * count. With no candidates this is exactly the barnacles' own fill.
+ */
+export function shareCells(room: number, want: DecorCounts): DecorCounts {
+  const n = { barnacles: wholeCount(want.barnacles), hooks: wholeCount(want.hooks), skills: wholeCount(want.skills) }
+  const got = { barnacles: Math.min(1, n.barnacles), hooks: Math.min(1, n.hooks), skills: Math.min(1, n.skills) }
+  let left = Math.max(0, room - got.barnacles - got.hooks - got.skills)
+  for (const kind of ['barnacles', 'hooks', 'skills'] as const) {
+    const more = Math.min(left, n[kind] - got[kind])
+    got[kind] += more
+    left -= more
+  }
+  return got
+}
+
+/**
+ * The cells the shell's decorations occupy, per kind, taken from the barnacles' fill order:
+ * barnacles first, then the hook gems, then the skill gems.
+ */
+export function shellDecor(body: Body, size: Size, want: DecorCounts): Decor {
+  const all = BARNACLES[body][size]
+  const got = shareCells(all.length, want)
+  return {
+    barnacles: copyCells(all.slice(0, got.barnacles)),
+    hooks: copyCells(all.slice(got.barnacles, got.barnacles + got.hooks)),
+    skills: copyCells(all.slice(got.barnacles + got.hooks, got.barnacles + got.hooks + got.skills)),
+  }
+}
+
+/** The shell with its decorations drawn: `*` for a barnacle, the gem for a hook or skill candidate. */
+export function withDecor(rows: string[], decor: Decor): string[] {
+  const cells = [...decor.barnacles, ...decor.hooks, ...decor.skills]
+  const glyphs = [...decor.barnacles.map(() => '*'), ...decor.hooks.map(() => GEM), ...decor.skills.map(() => GEM)]
+  return put(rows, cells, glyphs)
+}
+
 export const PROPS: readonly Prop[] = ['razor', 'compass', 'horns', 'devil']
 
 /** The word after /wear: a prop, `none` (or `off`) to undress, null for anything else or nothing. */
@@ -243,9 +315,9 @@ export function propCells(prop: Prop): Array<[number, number, string]> {
 }
 
 /**
- * Phi's compact rows with the prop drawn over them; a new list, the input untouched. A
- * prop is a costume on Phi only (one companion, one identity, the role shown by what it
- * holds): on Phial or at full size the rows come back unchanged.
+ * Naut's compact rows with the prop drawn over them; a new list, the input untouched. A
+ * prop is a costume on Naut only (one companion, one identity, the role shown by what it
+ * holds): on Phial the rows come back unchanged.
  */
 export function withProp(rows: string[], body: Body, size: Size, prop: Prop): string[] {
   if (body !== 'phi' || size !== 'compact') return rows.slice()

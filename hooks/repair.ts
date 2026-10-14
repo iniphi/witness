@@ -101,7 +101,7 @@ export const inputLine = (input: unknown): string => fullLine(input).slice(0, PA
 /** Tokens a call and its result cost, estimated at four characters each. */
 export const estTokens = (input: string, result: string): number => Math.ceil((input.length + result.length) / 4)
 
-type TargetCall = { tool: string; input: unknown; writers?: RegExp | null }
+type TargetCall = { tool: string; input: unknown; writers?: RegExp | null; sqlTools?: RegExp | null }
 
 const SENTINELS: ReadonlySet<string> = new Set(['*', 'git:*', 'migration:*', 'trigger:*', 'notion:new', 'trigger:new', 'notion:unknown'])
 const KIND_PREFIX = /^(?:fn|git|migration|trigger|notion):/
@@ -121,21 +121,54 @@ function queryTables(input: unknown): string[] {
 
 function classified(c: TargetCall): string[] {
   if (!isObj(c.input)) return []
-  const { writes, reads } = classify({ tool: c.tool, input: c.input, resultText: '', isError: false, isReadOnly: false, writers: c.writers })
+  const { writes, reads } = classify({ tool: c.tool, input: c.input, resultText: '', isError: false, isReadOnly: false, writers: c.writers, sqlTools: c.sqlTools })
   return [...writes, ...reads].map((t) => t.target)
 }
 
 /** Whether the call sets out to write anything: a failed write is cured only by a write. */
 export function writes(c: TargetCall): boolean {
   if (!isObj(c.input)) return false
-  return classify({ tool: c.tool, input: c.input, resultText: '', isError: false, isReadOnly: false, writers: c.writers }).writes.length > 0
+  return classify({ tool: c.tool, input: c.input, resultText: '', isError: false, isReadOnly: false, writers: c.writers, sqlTools: c.sqlTools }).writes.length > 0
 }
 
 /** The normalised targets a call names, lower-case and deduped: files, tables, Notion ids. */
 export function targetsOf(c: TargetCall): string[] {
   const tables = c.tool.includes('execute_sql') || c.tool.includes('apply_migration') ? queryTables(c.input) : []
-  const all = [...classified(c), ...notionIds(fullLine(c.input)), ...tables]
+  const line = fullLine(c.input)
+  const owned = sessionPathIds(line)
+  const ids = notionIds(line).filter((id) => !owned.has(id))
+  const all = [...classified(c), ...ids, ...tables]
   return unique(all.map(bare).filter((t): t is string => t !== null))
+}
+
+const UUID = '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}'
+const SEG = String.raw`[^\\/\s"'` + '`' + String.raw`]`
+const SEP = String.raw`[\\/]`
+
+/**
+ * Paths Claude Code owns whose uuid names a session (1.7.2, jewel 3, ruled by Bradley 2026-10-11):
+ * the scratchpad (`...\claude\<project>\<session>\...`), the transcript and its folder
+ * (`.claude\projects\<project>\<session>`), and file-history, session-env, todos, shell-snapshots
+ * and the mods' state files. A session never recurs, so its uuid is never a target; read as a
+ * Notion page id, it minted "Reach <uuid> by Write, not PowerShell" from one session's pairs.
+ */
+const SESSION_PATHS: readonly RegExp[] = [
+  new RegExp(`${SEP}claude${SEP}${SEG}+${SEP}(${UUID})`, 'gi'),
+  new RegExp(`${SEP}\\.claude${SEP}projects${SEP}${SEG}+${SEP}(${UUID})`, 'gi'),
+  new RegExp(`${SEP}\\.claude${SEP}(?:file-history|session-env|todos|shell-snapshots)${SEP}${SEG}*?(${UUID})`, 'gi'),
+  new RegExp(`${SEP}\\.claude${SEP}state${SEP}(?:${SEG}+${SEP})*${SEG}*?(${UUID})`, 'gi'),
+]
+
+/** The uuids, bare and lower-case, that sit in a Claude-owned session path in `text`. */
+export function sessionPathIds(text: string): Set<string> {
+  const out = new Set<string>()
+  for (const re of SESSION_PATHS) {
+    for (const m of text.matchAll(re)) {
+      const id = m[1]
+      if (id !== undefined) out.add(id.replace(/-/g, '').toLowerCase())
+    }
+  }
+  return out
 }
 
 type CallText = TargetCall & { resultText: string }
@@ -336,7 +369,7 @@ function pairOf(o: OpenFailure, cureTool: string, cured: string, at: number, cur
 /** A successful main-session call: every open failure it lands on becomes a repair pair. */
 export function cure(
   opens: readonly OpenFailure[],
-  c: { tool: string; input: unknown; at: number; writers?: RegExp | null },
+  c: { tool: string; input: unknown; at: number; writers?: RegExp | null; sqlTools?: RegExp | null },
 ): { opens: OpenFailure[]; pairs: RepairPair[] } {
   const full = fullLine(c.input)
   const line = full.slice(0, PAIR_TEXT_MAX)

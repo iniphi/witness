@@ -46,7 +46,8 @@ function asPair(v: unknown): RepairPair | null {
     typeof v.autoimmune === 'boolean'
   if (!ok || diff === null) return null
   const reread = measured(v.reread) === undefined ? {} : { reread: v.reread }
-  return { ...pick(v, TEXT_KEYS), ...pick(v, NUM_KEYS), ...reread, autoimmune: v.autoimmune, antigen: pick(v.antigen, ANTIGEN_KEYS), diff } as RepairPair
+  const turn = isStr(v.turn) && v.turn !== '' ? { turn: v.turn } : {}
+  return { ...pick(v, TEXT_KEYS), ...pick(v, NUM_KEYS), ...reread, ...turn, autoimmune: v.autoimmune, antigen: pick(v.antigen, ANTIGEN_KEYS), diff } as RepairPair
 }
 
 /** A stored list read back: only well-formed entries survive. */
@@ -63,12 +64,27 @@ const SHELLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell', 'Monitor'])
  */
 const exploration = (p: RepairPair): boolean => SHELLS.has(p.antigen.tool) && p.antigen.code === 'other' && p.antigen.target === p.antigen.tool
 
-export type PairMemory = { key: string; count: number; cost: number; reread: number; last: RepairPair }
+export type PairMemory = { key: string; count: number; sessions: number; cost: number; reread: number; last: RepairPair }
+
+/** The one session every pair stored before turns were kept shares (1.9): unknown, never a second. */
+const UNKNOWN_SESSION = '~unknown'
+
+/** The session a pair fell in: the part of `turn` (`<sessionId>:<turnId>`) before its last colon. */
+export function pairSession(p: RepairPair): string {
+  if (p.turn === undefined) return UNKNOWN_SESSION
+  const i = p.turn.lastIndexOf(':')
+  const session = i < 0 ? '' : p.turn.slice(0, i)
+  return session === '' ? UNKNOWN_SESSION : session
+}
 
 /**
- * Epitopes that recurred (2+ pairs), dearest first: by the calls' estimate plus the context
- * their attempts re-read, which is most of what a misfire costs. A key whose newest pair is
- * weather (no diff) is left alone, unless one of its pairs was autoimmune.
+ * Epitopes that recurred in TWO OR MORE SESSIONS (Bradley, 2026-10-11, "Two sessions"), dearest
+ * first: by the calls' estimate plus the context their attempts re-read, which is most of what a
+ * misfire costs. Several pairs in one session are recorded but are not memory: one session's
+ * repeats are not a recurring procedure. Pairs stored before turns were kept have no session and
+ * all share ONE unknown session, so stored memory mints again only once a new session repeats it.
+ * `count` stays the distinct turns (1.8's same-turn grouping; a legacy pair counts as its own).
+ * A key whose newest pair is weather (no diff) is left alone, unless one of its pairs was autoimmune.
  */
 export function memory(pairs: readonly RepairPair[]): PairMemory[] {
   const groups = new Map<string, RepairPair[]>()
@@ -79,7 +95,10 @@ export function memory(pairs: readonly RepairPair[]): PairMemory[] {
     const weather = last.diff.where === 'none' && !ps.some((p) => p.autoimmune)
     const cost = ps.reduce((n, p) => n + p.cost, 0)
     const reread = ps.reduce((n, p) => n + (p.reread ?? 0), 0)
-    if (ps.length >= 2 && !weather) out.push({ key, count: ps.length, cost, reread, last })
+    const sessions = new Set(ps.map(pairSession)).size
+    // The count shown is turns, not pairs (1.8): pairs that fell in one turn are one event.
+    const turns = new Set(ps.map((p) => p.turn ?? `~${p.at}:${p.firstAt}`)).size
+    if (sessions >= 2 && !weather) out.push({ key, count: turns, sessions, cost, reread, last })
   }
   return out.sort((a, b) => b.cost + b.reread - (a.cost + a.reread))
 }
@@ -116,7 +135,7 @@ export function pairCandidates(pairs: readonly RepairPair[], existing: readonly 
         key: `pair:${g.key}`,
         kind: t.kind,
         title: cut(t.title, TITLE_MAX),
-        why: cut(`${g.count} repair pairs, ${costText(g.cost, g.reread)} lost to the failed attempts`, WHY_MAX),
+        why: cut(`${g.count} repair pairs in ${g.sessions} sessions, ${costText(g.cost, g.reread)} lost to the failed attempts`, WHY_MAX),
         evidence: cut(pairLine(g.last), EVIDENCE_MAX),
         at,
         filed: false,
@@ -139,6 +158,40 @@ function diffText(p: RepairPair): string {
 export function pairLine(p: RepairPair): string {
   const a = p.antigen
   return `${a.code} ${a.kind} on ${a.target}: ${p.failures} failed (${costText(p.cost, p.reread)}), cured by ${shortTool(p.cureTool)}${diffText(p)}`
+}
+
+// The Barnacles pane's two-line row (1.11.2, Bradley: the pane was "borderline unreadable since
+// it's a flat full box of text"). pairLine stays the one-line form for the print and the evidence.
+
+/** Most characters of a cure's description in the pane, so a long diff wraps to two lines at most. */
+const CURE_MAX = 140
+
+/** A target short enough to read: a path's last two parts, a long hex id's first 8, a tool's name. */
+export function shortTarget(target: string): string {
+  if (target.includes('__')) return shortTool(target)
+  if (/^[0-9a-f]{16,}$/i.test(target)) return target.slice(0, 8)
+  const parts = target.split(/[\\/]+/).filter((s) => s !== '')
+  return parts.length > 2 ? parts.slice(-2).join('/') : parts.join('/')
+}
+
+/** What failed, said once: `refused`, never `refused refused`; `other` reads as `failed`. */
+function failureLabel(code: string, kind: string): string {
+  const said = code === kind ? code : `${code} ${kind}`
+  return said === 'other' ? 'failed' : said
+}
+
+/** The row's head: the target first, then what went wrong, with a count past one failure. */
+export function pairHead(p: RepairPair): string {
+  const a = p.antigen
+  const count = p.failures > 1 ? ` x${p.failures}` : ''
+  return `${shortTarget(a.target)} - ${failureLabel(a.code, a.kind)}${count}`
+}
+
+/** The row's second line: what cured it and how, then what the failing cost. */
+export function pairCure(p: RepairPair): string {
+  const how = diffText(p).replace(/^ - /, '')
+  const cure = cut(`cured by ${shortTool(p.cureTool)}${how === '' ? '' : `: ${how}`}`, CURE_MAX)
+  return `${cure}. Cost ${costText(p.cost, p.reread)}`
 }
 
 /** The print's repair section: the pairs cured since `since`. */

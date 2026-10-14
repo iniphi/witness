@@ -2,12 +2,13 @@
 // shapes its pure modules pass between them. One place these are written.
 
 export type Body = 'phi' | 'phial'
-export type Size = 'full' | 'compact'
+// The full-size companion was removed in 1.3.9; one size remains.
+export type Size = 'compact'
 export type Mood = 'calm' | 'resting' | 'alert' | 'shielding' | 'doubtful' | 'proud'
 
-/** A prop Phi can hold or wear: a costume for a later organ (FAMILY.md, 2026-10-09). */
+/** A prop Naut can hold or wear: a costume for a later organ (FAMILY.md, 2026-10-09). */
 export type Prop = 'razor' | 'compass' | 'horns' | 'devil'
-/** What Phi wears now; set by the /wear command, `none` by default. */
+/** What Naut wears now; set by the /wear command, `none` by default. */
 export type Costume = Prop | 'none'
 
 /** What the speech box says. `full` asks for the full sprite (one of the four moments). */
@@ -35,6 +36,11 @@ export type Notice = Speech & {
 export type NoticeQueue = {
   items: Notice[]
   seen: number
+  /**
+   * 1.3.8 (Bradley, 2026-10-11: "the arrows don't switch between claims"): the id of the notice
+   * paged to (`<beneath>` for the engine's own note); absent or gone, the head shows.
+   */
+  pinned?: string
 }
 
 /** Kinds of write the ledger tracks, each witnessed by a read of the same kind. */
@@ -142,6 +148,8 @@ export type Observed = {
   isError: boolean
   agent: boolean
   at: number
+  /** The turn the call fell in (witness's own turn id); absent on a call recorded before turns were kept. */
+  turn?: string
 }
 
 /** One of the user's own prompts (composer or bridge origin), kept as a witness source. */
@@ -165,6 +173,11 @@ export type Friction = {
   key: string
   at: number
   detail: string
+  /**
+   * The session that recorded it (1.9, "Two sessions"): a jewel needs its friction in two sessions.
+   * Absent on friction stored before sessions were kept: all of it counts as ONE unknown session.
+   */
+  session?: string
 }
 
 export type Barnacle = {
@@ -242,6 +255,11 @@ export type RepairPair = {
   autoimmune: boolean
   /** The context the failed attempts re-read, summed (OpenFailure.reread); absent when not measured. */
   reread?: number
+  /**
+   * The turn the cure fell in, as `<sessionId>:<turnId>`. Absent on a pair stored before turns were
+   * kept: it has no session, and all such pairs count as ONE unknown session (1.9).
+   */
+  turn?: string
 }
 
 /** A pod's state on the sonar (1.2): a turn running, between turns, or gone. */
@@ -304,7 +322,10 @@ export type Spoken = { header: string; text: string; at: number }
 /**
  * A proposal that something the witness saw could become a hook (an event-bound guard or
  * check) or a skill (a repeated multi-step procedure). Proposed only, never built (S163).
- * `filed` once appended to the running candidates file.
+ * `filed` once appended to the running candidates file. `settled` (1.5, Bradley 2026-10-11)
+ * is a different thing: the person took it up or dismissed it from the Barnacles pane. A
+ * candidate with no `settled` shows as a gem on the shell, filed or not, so rows stored
+ * before 1.5 show as gems until they are settled.
  */
 export type Candidate = {
   key: string
@@ -314,10 +335,52 @@ export type Candidate = {
   evidence: string
   at: number
   filed: boolean
+  /** `retired` (1.11.1): folded in from a stray subfolder slot; never shown or counted, and not fed to the generator as dismissed. */
+  settled?: { how: 'taken' | 'dismissed' | 'retired'; at: number }
+  /** `ruled` (1.12): the ruling after a calibration, recorded on top of a `taken` settle (never on any other); absent on every older record. */
+  ruled?: { how: 'built' | 'dismissed'; at: number }
 }
 
 /** A held write: the SQL as Claude sent it, and the CTE form offered, when there is one. */
 export type Hold = { toolUseId: string; sql: string; fixed: string | null; at: number }
+
+/** A write another guard refused beneath the witness (1.4.0): the red's second channel. Display only. */
+export type Refusal = {
+  /** The layer that refused, in words: "a PreToolUse hook (supabase-sql-verdict.py)". */
+  layer: string
+  /** The refusal's reason line, trimmed. */
+  reason: string
+  tool: string
+  /** When the burst's first refusal came: the whole-creature red runs from here, not from the latest. */
+  at: number
+  until: number
+  /** The notice queued for it, so a new prompt takes both away. */
+  noticeId: string
+  /** Refusals in this burst (1.10.0); absent or 1 is a single one. */
+  count?: number
+}
+
+/** The safelight blush (1.7): part of the shell reddens for an irreversible call, by who can undo it. */
+export type Blush = {
+  /** 1 rim, 2 rim and walls, 3 rim, walls and top. */
+  rung: 1 | 2 | 3
+  /** The bubble's text, kept so a result can renew the notice's expiry. */
+  text: string
+  at: number
+  /** While the call is in flight a ceiling; once it returns, the result plus BLUSH_MS. */
+  until: number
+  noticeId: string
+}
+
+/** Far more rows came back than the statement named (1.7): the creature goes fully red. Display only. */
+export type Haemorrhage = {
+  rows: number
+  named: number
+  table: string
+  at: number
+  until: number
+  noticeId: string
+}
 
 /** One open board row, as witness-watch.py returns it. */
 export type BoardRow = { id: string; from: string; subject: string; createdAt: string }
@@ -384,10 +447,18 @@ declare module 'claude-code' {
       /** Everything the bubble voices, one shown at a time (2026-10-09). */
       notices: NoticeQueue
       hold: Hold | null
+      /** A write another guard refused (1.4.0), until it lapses or the next prompt. */
+      refusal: Refusal | null
+      /** The blush of an irreversible call (1.7), until it lapses. */
+      blush: Blush | null
+      /** Many more rows than named (1.7), until it lapses or the next prompt. */
+      haemorrhage: Haemorrhage | null
+      /** The lamp test's end (1.7), epoch ms; null when it is not showing. */
+      lamp: number | null
       watch: Watch
       barnacles: Barnacle[]
       frame: number
-      /** The costume Phi wears this session (1.1); `none` until /wear sets one. */
+      /** The costume Naut wears this session (1.1); `none` until /wear sets one. */
       costume: Costume
       /** The running turn's id, kept across a mid-turn hot reload so its writes stay in its claim. */
       turn: string

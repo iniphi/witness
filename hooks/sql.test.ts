@@ -8,6 +8,7 @@ import {
   withReturning,
   writerCalls,
 } from './sql'
+import { writerPattern } from './config'
 
 test('bare UPDATE holds and gets a RETURNING wrapper', () => {
   const q = "UPDATE workspace.todo_mirror SET status='Done' WHERE id='x'"
@@ -43,13 +44,12 @@ test('CTE write without RETURNING holds but is not wrappable', () => {
 })
 
 test('writer function calls are not bare writes', () => {
-  const q = "SELECT workspace.close_todo('abc', 'done')"
+  const q = "SELECT app.finish_task('abc', 'done')"
+  const writers = writerPattern(['app.finish_task', 'app.log_*'])
   expect(needsHold(q)).toBe(false)
-  expect(writerCalls(q)).toEqual(['workspace.close_todo'])
-  expect(writerCalls('SELECT workspace.crosstalk_claim(1), workspace.crosstalk_resolve(2)')).toEqual([
-    'workspace.crosstalk_claim',
-    'workspace.crosstalk_resolve',
-  ])
+  expect(writerCalls(q)).toEqual([])
+  expect(writerCalls(q, writers)).toEqual(['app.finish_task'])
+  expect(writerCalls('SELECT app.log_open(1), app.log_close(2)', writers)).toEqual(['app.log_open', 'app.log_close'])
 })
 
 test('text in strings, comments and dollar bodies is ignored', () => {

@@ -18,9 +18,9 @@ import {
 import type { Body, Mood, Size } from '../types'
 
 const BODIES: Body[] = ['phi', 'phial']
-const SIZES: Size[] = ['full', 'compact']
-const WIDTH: Record<Size, number> = { full: 28, compact: 14 }
-const HEIGHT: Record<Size, number> = { full: 9, compact: 5 }
+const SIZES: Size[] = ['compact']
+const WIDTH: Record<Size, number> = { compact: 14 }
+const HEIGHT: Record<Size, number> = { compact: 5 }
 
 const cells = (rows: string[]): string[][] => rows.map((r) => Array.from(r))
 
@@ -58,7 +58,7 @@ test('every prop is a one-frame compact mask of the compact width', () => {
 })
 
 test('frame() wraps the index modulo three', () => {
-  expect(frame('phi', 'full', 3)).toEqual(FRAMES.phi.full[0])
+  expect(frame('phi', 'compact', 3)).toEqual(FRAMES.phi.compact[0])
   expect(frame('phial', 'compact', 5)).toEqual(FRAMES.phial.compact[2])
   expect(frame('phi', 'compact', -1)).toEqual(FRAMES.phi.compact[2])
 })
@@ -74,23 +74,17 @@ test('sprites carry the ruled glyphs: the chime from the second row, the underti
   expect(phi[4]).toContain('‾‾⁀‾‾')
   expect(FRAMES.phi.compact[2]![4]).toContain('‾⁀‾‾‾')
   expect(phi[2]).toContain('o>')
-  expect(FRAMES.phi.full[0]![1]).toContain('.__‿_.')
-  expect(FRAMES.phi.full[0]![7]).toContain('‾‾‾‾⁀‾‾‾')
-  expect(FRAMES.phi.full[2]![7]).toContain('‾‾‾⁀‾‾‾‾')
-  expect(FRAMES.phial.full[0]![5]).toContain('‿‿')
+  expect(FRAMES.phial.compact[0]![3]).toContain('‿‿')
   expect(FRAMES.phial.compact[0]![4]).toContain('`------\'')
 })
 
 // The tie sits under the wave, its mirror image, and moves with it (Bradley's sketch, 2026-10-09).
-test('the rim tie sits under the top wave in every compact Phi frame', () => {
+test('the rim tie sits under the top wave in every compact Naut frame', () => {
   for (const f of FRAMES.phi.compact) {
     const wave = Array.from(f[0]!).indexOf('‿')
     const tie = Array.from(f[4]!).indexOf('⁀')
     expect(wave).toBeGreaterThan(0)
     expect(tie).toEqual(wave)
-  }
-  for (const f of FRAMES.phi.full) {
-    expect(Array.from(f[7]!).indexOf('⁀')).toEqual(Array.from(f[1]!).indexOf('‿'))
   }
 })
 
@@ -119,9 +113,7 @@ test('the chime stands at the back: three bells on consecutive rows, a blank col
 })
 
 const EYE_CELLS: Record<string, Array<[number, number]>> = {
-  'phi/full': [[3, 21]],
   'phi/compact': [[2, 10]],
-  'phial/full': [[4, 7], [4, 10]],
   'phial/compact': [[2, 5], [2, 8]],
 }
 const GLYPH: Record<Mood, string> = { calm: 'o', resting: '-', alert: 'O', shielding: '>', doubtful: '.', proud: '^' }
@@ -150,24 +142,24 @@ test('withMood sets exactly the eye cells for each mood, every body, size and fr
   }
 })
 
-test('named eye cells: Phi compact and Phial full', () => {
+test('named eye cells: Naut and Phial', () => {
   const phi = withMood(frame('phi', 'compact', 0), 'phi', 'compact', 'alert')
   expect(Array.from(phi[2]!)[10]).toEqual('O')
-  const phial = withMood(frame('phial', 'full', 0), 'phial', 'full', 'proud')
-  expect(Array.from(phial[4]!)[7]).toEqual('^')
-  expect(Array.from(phial[4]!)[10]).toEqual('^')
-  const shut = withMood(frame('phial', 'full', 0), 'phial', 'full', 'shielding')
-  expect(Array.from(shut[4]!)[7]! + Array.from(shut[4]!)[10]!).toEqual('><')
+  const phial = withMood(frame('phial', 'compact', 0), 'phial', 'compact', 'proud')
+  expect(Array.from(phial[2]!)[5]).toEqual('^')
+  expect(Array.from(phial[2]!)[8]).toEqual('^')
+  const shut = withMood(frame('phial', 'compact', 0), 'phial', 'compact', 'shielding')
+  expect(Array.from(shut[2]!)[5]! + Array.from(shut[2]!)[8]!).toEqual('><')
 })
 
 test('withMood does not mutate its argument and survives a chain', () => {
-  const rows = frame('phial', 'full', 1)
+  const rows = frame('phial', 'compact', 1)
   const copy = rows.slice()
-  withMood(rows, 'phial', 'full', 'alert')
+  withMood(rows, 'phial', 'compact', 'alert')
   expect(rows).toEqual(copy)
-  const chained = withBells(withMood(rows, 'phial', 'full', 'doubtful'), 'phial', 'full', 2)
-  expect(Array.from(chained[4]!)[7]).toEqual('.')
-  expect(chained.map((r) => Array.from(r)[0]).join('')).toEqual('  ○○●    ')
+  const chained = withBells(withMood(rows, 'phial', 'compact', 'doubtful'), 'phial', 'compact', 2)
+  expect(Array.from(chained[2]!)[5]).toEqual('.')
+  expect(chained.map((r) => Array.from(r)[0]).join('')).toEqual(' ○○● ')
 })
 
 // Bradley's sketch (2026-10-09): three bells of an hour each, filling from the bottom, a
@@ -232,7 +224,7 @@ test('withBarnacles adds only * on cells that were spaces, at least four availab
 // Derived from the frames themselves, never from a copied cell list (the to-do's trap: a
 // width change moves every prop). Only the compass takes the tentacle tip, only the horns
 // take the shell's corners; every other prop cell is a space in all three frames.
-test('every prop cell lies on a free cell of every compact Phi frame, except GRIP and the corners', () => {
+test('every prop cell lies on a free cell of every compact Naut frame, except GRIP and the corners', () => {
   const frames = FRAMES.phi.compact
   for (const prop of PROPS) {
     for (const [r, c] of propCells(prop)) {
@@ -249,7 +241,7 @@ test('every prop cell lies on a free cell of every compact Phi frame, except GRI
   expect(propCells('razor').every(([r]) => r === GRIP[0])).toBe(true)
 })
 
-test('withProp dresses the compact Phi only, keeps every width, and leaves its input untouched', () => {
+test('withProp dresses the compact Naut only, keeps every width, and leaves its input untouched', () => {
   for (let i = 0; i < 3; i++) {
     const rows = frame('phi', 'compact', i)
     const copy = rows.slice()
@@ -262,7 +254,6 @@ test('withProp dresses the compact Phi only, keeps every width, and leaves its i
       for (const [r, c, , to] of changed) expect(propCells(prop)).toContainEqual([r, c, to])
     }
     expect(withProp(frame('phial', 'compact', i), 'phial', 'compact', 'razor')).toEqual(frame('phial', 'compact', i))
-    expect(withProp(frame('phi', 'full', i), 'phi', 'full', 'horns')).toEqual(frame('phi', 'full', i))
   }
   const dressed = withProp(frame('phi', 'compact', 0), 'phi', 'compact', 'compass')
   expect(dressed[3]).toContain('(+>)')

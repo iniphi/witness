@@ -22,7 +22,7 @@ import {
   targetsOf,
 } from './repair'
 // Memory, candidates and lines moved to immunity.ts when repair.ts passed 400 lines (S170).
-import { addPairs, asPairs, memory, pairCandidates, pairLine, pairsSection } from './immunity'
+import { addPairs, asPairs, memory, pairCandidates, pairCure, pairHead, pairLine, pairSession, pairsSection, shortTarget } from './immunity'
 
 const SQL = 'mcp__claude_ai_Supabase__execute_sql'
 const NOTION_UPDATE = 'mcp__claude_ai_Notion__notion-update-page'
@@ -189,6 +189,33 @@ test('targetsOf: files, Notion ids and shell ids come out bare and lower-case', 
   expect(targetsOf({ tool: NOTION_UPDATE, input: { page_id: PAGE_DASHED.toUpperCase(), command: 'update_content' } })).toEqual([PAGE])
   const curl = `curl -X PATCH https://api.notion.com/v1/pages/${PAGE_DASHED} -d @body.json`
   expect(targetsOf({ tool: 'Bash', input: { command: curl } })).toEqual([PAGE])
+})
+
+// 1.7.2 (jewel 3, ruled by Bradley 2026-10-11): a session's uuid in a path Claude Code owns is not a
+// Notion page. The scratchpad sits at ...\claude\<project>\<session uuid>\scratchpad, so every shell
+// call that touched it named the session as a target, and two such pairs in one session minted the
+// skill "Reach <uuid> by Write, not PowerShell".
+test('targetsOf: a session uuid in a Claude-owned path is never a target; a Notion id beside it still is', () => {
+  const SESSION = '0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+  const bareSession = SESSION.replace(/-/g, '')
+  const scratch = `C:\\Temp\\claude\\C--Work-proj\\${SESSION}\\scratchpad\\out.txt`
+  const ps = targetsOf({ tool: 'PowerShell', input: { command: `Set-Content -Path '${scratch}' -Value x` } })
+  expect(ps).not.toContain(bareSession)
+  const owned = [
+    `/tmp/claude/C--Work-proj/${SESSION}/scratchpad/a.txt`,
+    `C:/h/.claude/projects/C--Work-proj/${SESSION}.jsonl`,
+    `C:/h/.claude/projects/C--Work-proj/${SESSION}/subagents`,
+    `C:/h/.claude/file-history/${SESSION}/x`,
+    `C:/h/.claude/session-env/${SESSION}`,
+    `C:/h/.claude/todos/${SESSION}-agent-${SESSION}.json`,
+    `C:/h/.claude/state/ammonite/2026-10-11-0605-${SESSION}.json`,
+    `C:/h/.claude/state/witness-usage/2026-10-11/${SESSION}.json`,
+  ]
+  for (const p of owned) expect(targetsOf({ tool: 'Bash', input: { command: `cat ${p}` } })).not.toContain(bareSession)
+  const both = `curl https://api.notion.com/v1/pages/${PAGE_DASHED} -o '${scratch}'`
+  const t = targetsOf({ tool: 'Bash', input: { command: both } })
+  expect(t).toContain(PAGE)
+  expect(t).not.toContain(bareSession)
 })
 
 test('targetsOf drops the sentinels and keeps nothing it cannot name', () => {
@@ -581,8 +608,8 @@ test('the context each failed attempt re-read is summed, carried into the pair a
 })
 
 test('memory ranks by the estimate plus the context re-read', () => {
-  const cheapCalls = (at: number) => pair({ key: 'a', at, cost: 50, reread: 40_000 })
-  const dearCalls = (at: number) => pair({ key: 'b', at, cost: 900 })
+  const cheapCalls = (at: number) => pair({ key: 'a', turn: `s${at}:t1`, at, cost: 50, reread: 40_000 })
+  const dearCalls = (at: number) => pair({ key: 'b', turn: `s${at}:t1`, at, cost: 900 })
   expect(memory([dearCalls(1), dearCalls(2), cheapCalls(3), cheapCalls(4)]).map((g) => g.key)).toEqual(['a', 'b'])
   expect(memory([cheapCalls(3), cheapCalls(4)])[0]!.reread).toBe(80_000)
 })
@@ -716,7 +743,7 @@ test('asPairs checks every declared field', () => {
 // ---------------------------------------------------------------- memory
 
 test('memory keeps a key seen twice, sums its cost, and names the newest pair', () => {
-  const m = memory([pair({ at: 100, cost: 30 }), pair({ at: 300, cost: 50, failures: 2 })])
+  const m = memory([pair({ turn: 's100:t1', at: 100, cost: 30 }), pair({ turn: 's300:t1', at: 300, cost: 50, failures: 2 })])
   expect(m).toHaveLength(1)
   expect(m[0]!.key).toBe(KEY)
   expect(m[0]!.count).toBe(2)
@@ -725,22 +752,68 @@ test('memory keeps a key seen twice, sums its cost, and names the newest pair', 
   expect(m[0]!.last.failures).toBe(2)
 })
 
+// Jewel 2 of the 2026-10-11 calibration: one parallel message of refusals is one event.
+test('memory counts pairs that fell in one turn as one, and needs two sessions', () => {
+  const same = [pair({ at: 1, turn: 's:t1' }), pair({ at: 2, turn: 's:t1' }), pair({ at: 3, turn: 's:t1' })]
+  expect(memory(same)).toEqual([])
+  // More turns in the same session are still one session: recorded, not memory.
+  expect(memory([...same, pair({ at: 9, turn: 's:t2' })])).toEqual([])
+  const m = memory([...same, pair({ at: 9, turn: 'u:t2' })])
+  expect(m).toHaveLength(1)
+  expect(m[0]!.count).toBe(2)
+  expect(m[0]!.sessions).toBe(2)
+  expect(m[0]!.cost).toBe(4 * pair().cost)
+})
+
+// Two sessions (Bradley, 2026-10-11): a 405 session's 22 jewels all came from one session.
+test('memory: two pairs in one session are not memory; one in each of two sessions is', () => {
+  expect(memory([pair({ at: 1, turn: 'a:t1' }), pair({ at: 2, turn: 'a:t7' })])).toEqual([])
+  const m = memory([pair({ at: 1, turn: 'a:t1' }), pair({ at: 2, turn: 'b:t1' })])
+  expect(m).toHaveLength(1)
+  expect(m[0]!.sessions).toBe(2)
+  expect(pairCandidates([pair({ at: 1, turn: 'a:t1' }), pair({ at: 2, turn: 'a:t7' })], [], 9)).toEqual([])
+  expect(pairCandidates([pair({ at: 1, turn: 'a:t1' }), pair({ at: 2, turn: 'b:t1' })], [], 9)).toHaveLength(1)
+})
+
+test('pairSession is the part of turn before its last colon; no turn is the one unknown session', () => {
+  expect(pairSession(pair({ turn: 'abc:t4' }))).toBe('abc')
+  expect(pairSession(pair({ turn: 'session-17:3' }))).toBe('session-17')
+  expect(pairSession(pair())).toBe(pairSession(pair({ at: 5 })))
+  expect(pairSession(pair({ turn: ':t1' }))).toBe(pairSession(pair()))
+})
+
+test('memory counts every pair stored before turns were kept as ONE unknown session', () => {
+  expect(memory([pair({ at: 1 }), pair({ at: 2 })])).toEqual([])
+  expect(memory([pair({ at: 1 }), pair({ at: 2 }), pair({ at: 3 })])).toEqual([])
+  // Stored memory mints again once a new session repeats it.
+  const m = memory([pair({ at: 1 }), pair({ at: 2 }), pair({ at: 3, turn: 's:t1' })])
+  expect(m).toHaveLength(1)
+  expect(m[0]!.sessions).toBe(2)
+  expect(m[0]!.count).toBe(3)
+  expect(memory([pair({ at: 1, turn: 's:t1' }), pair({ at: 2, turn: 's:t1' })])).toEqual([])
+})
+
+test('a stored pair keeps its turn through asPairs', () => {
+  expect(asPairs([pair({ turn: 's:t4' })])[0]!.turn).toBe('s:t4')
+  expect(asPairs([pair()])[0]!.turn).toBeUndefined()
+})
+
 test('memory drops a single pair, and weather left alone', () => {
   const none = { where: 'none' as const, removed: [], added: [] }
-  const weather = (at: number) => pair({ key: 'timeout|x', at, diff: none })
+  const weather = (at: number) => pair({ key: 'timeout|x', turn: `s${at}:t1`, at, diff: none })
   expect(memory([pair()])).toEqual([])
   expect(memory([weather(1), weather(2)])).toEqual([])
   // A key whose newest pair is weather is weather, whatever it was before.
-  expect(memory([pair({ at: 1 }), pair({ at: 2, diff: none })])).toEqual([])
+  expect(memory([pair({ turn: 's1:t1', at: 1 }), pair({ turn: 's2:t1', at: 2, diff: none })])).toEqual([])
   // A key that was weather and is now a real fix is kept.
-  expect(memory([pair({ at: 1, diff: none }), pair({ at: 2 })])).toHaveLength(1)
+  expect(memory([pair({ turn: 's1:t1', at: 1, diff: none }), pair({ turn: 's2:t1', at: 2 })])).toHaveLength(1)
 })
 
 test('memory keeps weather that has an autoimmune pair in it', () => {
   const none = { where: 'none' as const, removed: [], added: [] }
   const m = memory([
-    pair({ key: 'refused|Bash', at: 1, diff: none, autoimmune: true }),
-    pair({ key: 'refused|Bash', at: 2, diff: none, autoimmune: false }),
+    pair({ key: 'refused|Bash', turn: 's1:t1', at: 1, diff: none, autoimmune: true }),
+    pair({ key: 'refused|Bash', turn: 's2:t1', at: 2, diff: none, autoimmune: false }),
   ])
   expect(m).toHaveLength(1)
   expect(m[0]!.count).toBe(2)
@@ -748,10 +821,10 @@ test('memory keeps weather that has an autoimmune pair in it', () => {
 
 test('memory sorts by cost, dearest first', () => {
   const m = memory([
-    pair({ key: 'a', cost: 10, at: 1 }),
-    pair({ key: 'a', cost: 10, at: 2 }),
-    pair({ key: 'b', cost: 90, at: 3 }),
-    pair({ key: 'b', cost: 90, at: 4 }),
+    pair({ key: 'a', cost: 10, turn: 's1:t1', at: 1 }),
+    pair({ key: 'a', cost: 10, turn: 's2:t1', at: 2 }),
+    pair({ key: 'b', cost: 90, turn: 's3:t1', at: 3 }),
+    pair({ key: 'b', cost: 90, turn: 's4:t1', at: 4 }),
   ])
   expect(m.map((g) => g.key)).toEqual(['b', 'a'])
 })
@@ -765,14 +838,14 @@ test('shortTool takes the part after the last double underscore', () => {
 // ---------------------------------------------------------------- candidates
 
 test('pairCandidates: a recurring content pair is a hook candidate', () => {
-  const out = pairCandidates([pair({ at: 1, cost: 40 }), pair({ at: 2, cost: 60 })], [], 777)
+  const out = pairCandidates([pair({ turn: 's1:t1', at: 1, cost: 40 }), pair({ turn: 's2:t1', at: 2, cost: 60 })], [], 777)
   expect(out).toHaveLength(1)
   const c = out[0]!
   expect(c.key).toBe(`pair:${KEY}`)
   expect(c.kind).toBe('hook')
   expect(c.title).toBe('Check workspace.todo_mirror.statuss before sending (42703 undefined-column)')
-  expect(c.why).toBe('2 repair pairs, ~100 est. tokens lost to the failed attempts')
-  expect(c.evidence).toBe(pairLine(pair({ at: 2, cost: 60 })))
+  expect(c.why).toBe('2 repair pairs in 2 sessions, ~100 est. tokens lost to the failed attempts')
+  expect(c.evidence).toBe(pairLine(pair({ turn: 's2:t1', at: 2, cost: 60 })))
   expect(c.filed).toBe(false)
   expect(c.at).toBe(777)
 })
@@ -785,6 +858,7 @@ test('pairCandidates: a recurring route pair is a skill candidate', () => {
       failedTool: NOTION_UPDATE,
       cureTool: 'Bash',
       diff: { where: 'route', removed: ['a'], added: ['b'] },
+      turn: `s${at}:t1`,
       at,
     })
   const out = pairCandidates([route(1), route(2)], [], 5)
@@ -802,6 +876,7 @@ test('pairCandidates: an autoimmune group asks for a retune of the guard', () =>
       cureTool: 'Bash',
       diff: none,
       autoimmune,
+      turn: `s${at}:t1`,
       at,
     })
   const out = pairCandidates([auto(1, true), auto(2, false)], [], 5)
@@ -826,6 +901,7 @@ test('pairCandidates: titles stop at 80 characters, why at 160, evidence at 200'
       key: `42703|${target}`,
       antigen: { tool: SQL, code: '42703', kind: 'undefined-column', target, fragment: 'column', reason: 'r' },
       diff: { where: 'content', removed: ['q'.repeat(40), 'r'.repeat(40), 's'.repeat(40), 'u'.repeat(40)], added: ['v'.repeat(40), 'w'.repeat(40)] },
+      turn: `s${at}:t1`,
       at,
     })
   const c = pairCandidates([long(1), long(2)], [], 1)[0]!
@@ -862,6 +938,35 @@ test('pairLine: route, weather and autoimmune', () => {
   expect(auto.includes('weather')).toBe(false)
 })
 
+// ---------------------------------------------------------------- the pane's two-line row (1.11.2)
+
+test('shortTarget: a path keeps its last two parts, a long hex id its first 8, a tool its name', () => {
+  expect(shortTarget('c:/work/proj/.claude/logs/2026-01-02-0304.md')).toBe('logs/2026-01-02-0304.md')
+  expect(shortTarget('C:\\Work\\tools\\staging\\test_hook.py')).toBe('staging/test_hook.py')
+  expect(shortTarget('c:/work')).toBe('c:/work')
+  expect(shortTarget('0123456789abcdef0123456789abcdef')).toBe('01234567')
+  expect(shortTarget('mcp__claude_ai_Supabase__execute_sql')).toBe('execute_sql')
+  expect(shortTarget('workspace.page_registry')).toBe('workspace.page_registry')
+  expect(shortTarget('push')).toBe('push')
+})
+
+test('pairHead: target first, the label said once, other read as failed, a count past one', () => {
+  expect(pairHead(pair())).toBe('workspace.todo_mirror.statuss - 42703 undefined-column')
+  const refused = { tool: SQL, code: 'refused', kind: 'refused', target: 'workspace.page_registry', fragment: 'f', reason: 'r' }
+  expect(pairHead(pair({ antigen: refused }))).toBe('workspace.page_registry - refused')
+  const other = { tool: 'Bash', code: 'other', kind: 'other', target: 'push', fragment: 'f', reason: 'r' }
+  expect(pairHead(pair({ antigen: other, failures: 3 }))).toBe('push - failed x3')
+})
+
+test('pairCure: what cured it and how, then the cost; long diffs are cut', () => {
+  expect(pairCure(pair())).toBe('cured by execute_sql: removed statuss; added status. Cost ~100 est. tokens')
+  const route = pairCure(pair({ cureTool: 'Bash', diff: { where: 'route', removed: [], added: [] } }))
+  expect(route.startsWith('cured by Bash: by another route')).toBe(true)
+  const long = pairCure(pair({ diff: { where: 'content', removed: ['x'.repeat(200)], added: [] } }))
+  expect(long.includes('...')).toBe(true)
+  expect(long.endsWith('~100 est. tokens')).toBe(true)
+})
+
 test('pairsSection lists the pairs cured since a time, or says none', () => {
   const lines = pairsSection([pair({ at: 100 }), pair({ at: 500, key: 'k2' })], 300)
   expect(lines.slice(0, 2)).toEqual(['### Repair pairs', ''])
@@ -878,7 +983,7 @@ test('no function mutates what it is given', () => {
   const opens = deepFreeze(noteFailure([], { tool: SQL, input: { query: BAD }, resultText: ERR_COL, at: 1000 }))
   const callIn = deepFreeze({ query: GOOD })
   const failIn = deepFreeze({ query: BAD })
-  const pairs = deepFreeze([pair({ at: 1 }), pair({ at: 2 })])
+  const pairs = deepFreeze([pair({ turn: 's1:t1', at: 1 }), pair({ turn: 's2:t1', at: 2 })])
   const existing = deepFreeze<Candidate[]>([])
   const raw = deepFreeze(JSON.parse(JSON.stringify(pairs)) as unknown)
   expect(noteFailure(opens, { tool: SQL, input: failIn, resultText: ERR_COL, at: 2000 })[0]!.attempts).toBe(2)

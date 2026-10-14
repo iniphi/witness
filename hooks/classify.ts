@@ -12,7 +12,10 @@
 // Nothing ever witnesses an unknown write: a claim resting on one stays pale.
 
 import type { Classified, Touch } from '../types'
+import { DEFAULT_SQL_TOOLS, isSqlTool, sqlToolPattern } from './config'
 import { maskSql, statements, tablesRead, tablesWritten, writerCalls } from './sql'
+
+const DEFAULT_SQL_PATTERN = sqlToolPattern(DEFAULT_SQL_TOOLS)
 
 export type ToolCall = {
   tool: string
@@ -23,6 +26,8 @@ export type ToolCall = {
   isReadOnly?: boolean
   /** The SELECT-led write functions (config `writerCalls`); absent, the estate's list. */
   writers?: RegExp | null
+  /** The SQL tools (config `sqlTools`, as config.ts sqlToolPattern builds it); absent, any `mcp__*__execute_sql`. */
+  sqlTools?: RegExp | null
 }
 
 type SelfTouch = Touch & { selfWitnessed: boolean }
@@ -66,20 +71,24 @@ export const MAX_NAMED = 12
 const URL_RE = /\bhttps?:\/\/\S+/gi
 // A path names at least one folder and ends in a file with an extension; a space ends it.
 const PATH_RE = /(?:[A-Za-z]:[\\/]|\/)?(?:[\w.@~-]+[\\/])+[\w@~-][\w.@~-]*\.[A-Za-z0-9]{1,8}(?![\w\\/])/g
-// A table in the workspace or public schema; a call (`schema.fn(`) is not a table.
-const TABLE_RE = /\b(?:workspace|public)\.[a-z_][a-z0-9_]*\b(?!\s*\()/gi
+// A table in one of the configured schemas (default `public`); a call (`schema.fn(`) is not a table.
+const DEFAULT_SCHEMAS: readonly string[] = ['public']
+function tableRe(schemas: readonly string[]): RegExp {
+  const ok = schemas.filter((n) => /^[A-Za-z_]\w*$/.test(n))
+  return new RegExp(`\\b(?:${(ok.length > 0 ? ok : DEFAULT_SCHEMAS).join('|')})\\.[a-z_][a-z0-9_]*\\b(?!\\s*\\()`, 'gi')
+}
 
 /**
  * The targets a subagent's report names (1.1), read conservatively: file paths with a folder
- * and an extension, `workspace.` or `public.` tables, Notion page ids. A report resting on no
+ * and an extension, tables in the configured schemas (default `public.`), Notion page ids. A report resting on no
  * write the ledger knows develops only when the main loop reads one of these back.
  */
-export function namedTargets(text: string): Touch[] {
+export function namedTargets(text: string, schemas: readonly string[] = DEFAULT_SCHEMAS): Touch[] {
   const raw = String(text ?? '')
   const notion = notionIds(raw).map((id): Touch => ({ kind: 'notion', target: id }))
   const prose = raw.replace(URL_RE, ' ')
   const files = (prose.match(PATH_RE) ?? []).map((p): Touch => ({ kind: 'file', target: normPath(p) }))
-  const tables = (prose.match(TABLE_RE) ?? []).map((t): Touch => ({ kind: 'sql', target: t.toLowerCase() }))
+  const tables = (prose.match(tableRe(schemas)) ?? []).map((t): Touch => ({ kind: 'sql', target: t.toLowerCase() }))
   return dedupe([...files, ...tables, ...notion]).slice(0, MAX_NAMED)
 }
 
@@ -211,6 +220,20 @@ function unwrapCompound(words: string[], seg: string): string[] {
 /** A command word as a bare name: no directory, lower-case, no .exe/.cmd/.bat/.ps1. */
 const commandName = (word: string): string =>
   word.toLowerCase().replace(/^.*[/\\]/, '').replace(/\.(exe|cmd|bat|ps1)$/, '')
+
+/**
+ * The commands a shell line runs, each as its bare name and its arguments (quotes removed), in
+ * order, with the commands inside substitutions first. The blush (1.7) reads `git push` from it
+ * rather than from a regex over the raw line, so quoting and `&&` chains are read as above.
+ */
+export function shellCommands(command: string): Array<{ name: string; args: string[] }> {
+  const { outer, inner } = substitutions(command)
+  const own = splitSegments(outer)
+    .map((seg) => commandWords(seg).cmd)
+    .filter((c) => c.length > 0)
+    .map((c) => ({ name: commandName(c[0] ?? ''), args: c.slice(1) }))
+  return [...inner.flatMap(shellCommands), ...own]
+}
 
 // ---------------------------------------------------------------- test runs
 
@@ -598,9 +621,9 @@ function fileTouch(op: 'read' | 'write', path: unknown): Classified {
 const SUPABASE = /^mcp__.*supabase.*__([a-z_]+)$/i
 const NOTION = /^mcp__.*notion.*__(notion-[a-z-]+)$/i
 
-function classifyMcp(tool: string, input: Record<string, unknown>, resultText: string, writers?: RegExp | null): Classified {
+function classifyMcp(tool: string, input: Record<string, unknown>, resultText: string, writers?: RegExp | null, sqlTools?: RegExp | null): Classified {
+  if (isSqlTool(tool, sqlTools === undefined ? DEFAULT_SQL_PATTERN : sqlTools)) return classifySql(str(input.query), resultText, writers)
   const supa = SUPABASE.exec(tool)?.[1]
-  if (supa === 'execute_sql') return classifySql(str(input.query), resultText, writers)
   if (supa === 'apply_migration') {
     const name = str(input.name).trim().toLowerCase() || 'unnamed'
     return { writes: [{ kind: 'migration', target: `migration:${name}`, selfWitnessed: false }], reads: [] }
@@ -623,7 +646,7 @@ function known(call: ToolCall, input: Record<string, unknown>, resultText: strin
     case 'Grep': return fileTouch('read', input.path)
     case 'Bash': case 'PowerShell': return fold(shellEvents(str(input.command)))
     case 'RemoteTrigger': return classifyTrigger(input, resultText)
-    default: return classifyMcp(call.tool, input, resultText, call.writers)
+    default: return classifyMcp(call.tool, input, resultText, call.writers, call.sqlTools)
   }
 }
 
@@ -632,6 +655,8 @@ function known(call: ToolCall, input: Record<string, unknown>, resultText: strin
 const READONLY_WORDS = new Set([
   'diff', 'ls', 'dir', 'wc', 'stat', 'echo', 'printf', 'pwd', 'which', 'where', 'type', 'test', '[',
   'true', 'false', ':', 'continue', 'break', 'date', 'sort', 'uniq', 'cut', 'tr', 'basename', 'dirname', 'realpath', 'cd',
+  // 1.3.5 (loop pass 1, 2026-10-11): stream tools that only read and print; the fence refused a read through paste.
+  'paste', 'nl', 'column',
   'get-childitem', 'get-location', 'test-path', 'select-string',
 ])
 const KNOWN_WRITE_WORDS = new Set(['rm', 'mv', 'cp', 'tee'])

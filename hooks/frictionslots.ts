@@ -31,8 +31,18 @@ const isFriction = (f: unknown): f is Friction =>
   typeof (f as Friction).at === 'number' &&
   typeof (f as Friction).detail === 'string'
 
+/** An entry as stored: a `session` that is not a non-empty string is dropped (legacy: the unknown session). */
+const cleanFriction = (f: Friction): Friction => {
+  const { session, ...rest } = f
+  return typeof session === 'string' && session !== '' ? { ...rest, session } : { ...rest }
+}
+
 /** A stored list of friction (the archive, or the old single slot), malformed entries dropped. */
-export const asFrictionList = (v: unknown): Friction[] => (Array.isArray(v) ? v.filter(isFriction).map(f => ({ ...f })) : [])
+export const asFrictionList = (v: unknown): Friction[] => (Array.isArray(v) ? v.filter(isFriction).map(cleanFriction) : [])
+
+/** Entries with no session take the slot's: a slot knows whose it is (1.9). Entries already stamped keep theirs. */
+export const stampSession = (entries: readonly Friction[], session: string): Friction[] =>
+  entries.map(f => (f.session === undefined ? { ...f, session } : { ...f }))
 
 /** A stored slot read back; null for anything else. */
 export function asFrictionSlot(v: unknown): FrictionSlot | null {

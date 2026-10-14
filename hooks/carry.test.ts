@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import type { Ask } from '../types'
-import { CARRY_STALE_MS, asCarrySlot, carryPrefix, carrySlot, carrySlotKey, mergeCarried, takeable } from './carry'
+import { CARRY_STALE_MS, asCarrySlot, carryPrefix, carrySlot, carrySlotKey, mergeCarried, ownLeftovers, takeable } from './carry'
 
 // Carry-over per session (Bradley, 2026-10-09): a starting session takes only the leftovers of
 // sessions that have ended; a live session's undone asks are never taken or overwritten.
@@ -33,6 +33,16 @@ test('only an ended or stale slot of another session is takeable; a live one nev
     true,
     false,
   ])
+})
+
+// F9 (2026-10-11, live): after the laptop restarted, a resumed conversation ran with an empty ledger
+// and its own slot (never ended: the process was killed) was stranded, since no session takes its own.
+test('ownLeftovers: a resumed session takes back the asks of its own slot that it does not already hold', () => {
+  const slot = [ask('a', 'Fix the walker'), ask('b', 'Ship it')]
+  expect(ownLeftovers(slot, []).map(x => x.id)).toEqual(['a', 'b'])
+  // A hot reload in the same process still holds them: nothing is added twice.
+  expect(ownLeftovers(slot, [ask('x', 'fix the walker.'), ask('y', 'Ship it')])).toEqual([])
+  expect(ownLeftovers(slot, [ask('x', 'Fix the walker')]).map(x => x.id)).toEqual(['b'])
 })
 
 test('several ended sessions merge, the same ask once, nothing mutated', () => {

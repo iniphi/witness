@@ -133,14 +133,16 @@ test('a 42703 misfire and the corrected call are kept as one repair pair (1.2)',
     requestId: 'witness-barnacles',
     props: { title: 'Barnacles', isFocused: true, bodyColumns: 160, placement: 'dock', scroll: { bodyRows: 20 } },
   } as any)
-  expect(await pane.find({ type: 'Text', text: /42703 undefined-column on workspace\.todo_mirror\.statuss/ })).toBeDefined()
+  // 1.11.2: two lines a pair under a "Repair pairs" heading, the target first and the label once.
+  expect(await pane.find({ type: 'Text', text: /^Repair pairs$/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /workspace\.todo_mirror\.statuss - 42703 undefined-column/ })).toBeDefined()
   expect(await pane.find({ type: 'Text', text: /removed statuss/ })).toBeDefined()
   // The context the attempt re-read, measured from the session's usage (a side agent's note, S170).
   expect(await pane.find({ type: 'Text', text: /\+ ~52k context re-read/ })).toBeDefined()
   await pane.unmount()
 })
 
-test('a sub-agent\'s failure opens no antigen, and a success alone makes no pair (1.2)', async ($, on) => {
+test('a sub-agent\'s failure opens no antigen, and a success alone makes no pair (1.2)', { timeoutMs: 15_000 }, async ($, on) => {
   const files = new Map<string, string>()
   const { clock } = world(on, files)
   sqlTool(on)

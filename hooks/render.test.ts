@@ -100,7 +100,7 @@ function engineUnderWidth(n: any, sized: boolean): number {
 }
 
 function bandFor(body: number, below: unknown): any {
-  const view: any = { size: 'compact', sprite: [' ', ' ', ' ', ' ', ' '], colour: undefined, safelight: false, eyes: [], bells: [], barnacles: [], costume: [], status: 'asks 0/0', speech: [], bubble: null }
+  const view: any = { size: 'compact', sprite: [' ', ' ', ' ', ' ', ' '], colour: undefined, safelight: false, eyes: [], bells: [], barnacles: [], hookGems: [], skillGems: [], costume: [], blush: [], status: 'asks 0/0', speech: [], bubble: null }
   return bandTree(TABLE, body, view, below, 2, null)
 }
 
@@ -189,7 +189,7 @@ test('withCount leaves a note untouched when its Dismiss is not in a row', () =>
 })
 
 test('rowInks: the chime and the barnacles take their inks, the eyes the warning colour only when metered (1.1)', () => {
-  const view: any = { bells: [[1, 13], [2, 13], [3, 13], [4, 13]], barnacles: [[1, 9]], eyes: [[2, 3]], costume: [[3, 2], [3, 1], [3, 0]] }
+  const view: any = { bells: [[1, 13], [2, 13], [3, 13], [4, 13]], barnacles: [[1, 9]], hookGems: [], skillGems: [], eyes: [[2, 3]], costume: [[3, 2], [3, 1], [3, 0]], blush: [] }
   expect(rowInks(view, 1, false)).toEqual([{ col: 9, color: '#B59670' }, { col: 13, color: '#649090' }])
   expect(rowInks(view, 2, true)).toEqual([{ col: 3, color: 'warning' }, { col: 13, color: '#649090' }])
   expect(rowInks(view, 2, false)).toEqual([{ col: 13, color: '#649090' }])

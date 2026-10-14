@@ -30,9 +30,6 @@ const DELETE_RE = new RegExp(`\\bdelete\\s+from\\s+(?:only\\s+)?(${NAME})`, 'gi'
 const INSERT_RE = new RegExp(`\\binsert\\s+into\\s+(${NAME})`, 'gi')
 const MERGE_RE = new RegExp(`\\bmerge\\s+into\\s+(?:only\\s+)?(${NAME})`, 'gi')
 const TRUNCATE_RE = /\btruncate\s+(?:table\s+)?(?:only\s+)?/gi
-// The estate's list, as config.ts DEFAULT_WRITERS builds it; the default when none is passed.
-const WRITER_RE =
-  /\b(workspace\s*\.\s*(?:close_todo|set_todo_status|pause_todo|crosstalk_[a-z_]+|record_board_attention|claim_item|release_claim))\s*\(/gi
 const FUNCTION_FORMS = new Set(['extract', 'substring', 'trim', 'overlay', 'position'])
 const KEYWORDS = new Set([
   'where', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'natural', 'on', 'using',
@@ -322,8 +319,8 @@ export function tablesRead(sql: string): string[] {
   return unique(splitStmts(sql).flatMap((s) => readsIn(s.masked)))
 }
 
-/** Writer calls in a SELECT; `writers` is the configured pattern (default: the estate's list). */
-export function writerCalls(sql: string, writers: RegExp | null = WRITER_RE): string[] {
+/** Writer calls in a SELECT; `writers` is the configured pattern (config.ts writerPattern); none by default. */
+export function writerCalls(sql: string, writers: RegExp | null = null): string[] {
   if (writers === null) return []
   const calls: string[] = []
   for (const s of splitStmts(sql)) {

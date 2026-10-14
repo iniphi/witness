@@ -11,15 +11,15 @@ import {
   notionIds,
   rowCount,
 } from './classify'
-
+import { sqlToolPattern, writerPattern } from './config'
 // 1.1: what a subagent's report names, for a report that rests on no write the ledger knows.
 test('namedTargets reads paths with a folder and an extension, schema tables and Notion ids, conservatively', () => {
   const id = '0123456789abcdef0123456789abcdef'
-  const report = `Done. Wrote C:\\Work\\Proj\\src\\a.ts and mods/witness/hooks/b.tsx; read workspace.todo_mirror, called workspace.close_todo(), page ${id}. See https://example.com/x/y.html, v1.2 and and/or. README.md alone names no folder.`
+  const report = `Done. Wrote C:\\Work\\Proj\\src\\a.ts and mods/witness/hooks/b.tsx; read public.todo_mirror, called app.finish_task(), page ${id}. See https://example.com/x/y.html, v1.2 and and/or. README.md alone names no folder.`
   expect(namedTargets(report)).toEqual([
     { kind: 'file', target: 'c:/work/proj/src/a.ts' },
     { kind: 'file', target: 'mods/witness/hooks/b.tsx' },
-    { kind: 'sql', target: 'workspace.todo_mirror' },
+    { kind: 'sql', target: 'public.todo_mirror' },
     { kind: 'notion', target: id },
   ])
   expect(namedTargets('Done, all good.')).toEqual([])
@@ -234,11 +234,31 @@ test('a SELECT is an sql read and a migration:* read', () => {
 })
 
 test('a SELECT-led writer function is an fn write, self-witnessed when a row shows', () => {
-  const q = "SELECT workspace.close_todo('abc', 'done')"
-  expect(call(SQL, { query: q }, wrap('[{"close_todo":"ok"}]')).writes).toEqual([
-    { kind: 'sql', target: 'fn:workspace.close_todo', selfWitnessed: true },
+  const q = "SELECT app.finish_task('abc', 'done')"
+  const writers = writerPattern(['app.finish_*'])
+  const run = (body: string) => classify({ tool: SQL, input: { query: q }, resultText: wrap(body), isError: false, writers })
+  expect(run('[{"finish_task":"ok"}]').writes).toEqual([
+    { kind: 'sql', target: 'fn:app.finish_task', selfWitnessed: true },
   ])
-  expect(call(SQL, { query: q }, wrap('[]')).writes[0]?.selfWitnessed).toBe(false)
+  expect(run('[]').writes[0]?.selfWitnessed).toBe(false)
+  // Neutral default (2026-10-11): with no writer list a SELECT writes nothing.
+  expect(call(SQL, { query: q }, wrap('[{"finish_task":"ok"}]')).writes).toEqual([])
+})
+
+test('the SQL tool is any mcp__*__execute_sql by default, else the configured pattern', () => {
+  const q = "UPDATE public.t SET a = 1 WHERE id = 2"
+  const target = [{ kind: 'sql', target: 'public.t', selfWitnessed: false }]
+  expect(call('mcp__acme_db__execute_sql', { query: q }, wrap('[]')).writes).toEqual(target)
+  expect(call('mcp__acme_db__run_query', { query: q }, wrap('[]'), false, true).writes).toEqual([])
+  const sqlTools = sqlToolPattern(['mcp__acme_db__run_*'])
+  expect(classify({ tool: 'mcp__acme_db__run_query', input: { query: q }, resultText: wrap('[]'), isError: false, sqlTools }).writes).toEqual(target)
+  expect(classify({ tool: 'mcp__acme_db__execute_sql', input: { query: q }, resultText: wrap('[]'), isError: false, isReadOnly: true, sqlTools }).writes).toEqual([])
+})
+
+test('namedTargets reads the configured schemas, public by default', () => {
+  const text = 'Done: read public.a and app.b and workspace.c'
+  expect(namedTargets(text)).toEqual([{ kind: 'sql', target: 'public.a' }])
+  expect(namedTargets(text, ['public', 'app'])).toEqual([{ kind: 'sql', target: 'public.a' }, { kind: 'sql', target: 'app.b' }])
 })
 
 test('a cancelled write stays unwitnessed and reads nothing', () => {
@@ -452,6 +472,19 @@ test('an assignment after do, then or a brace is skipped like one at the head', 
   expect(bash('if true; then X=1 rm a; fi').writes).toEqual([fw('a')])
   expect(bash('for f in a; do X=1 python x.py; done').writes).toEqual([other('other:shell')])
   expect(bash(': > out.txt').writes).toEqual([fw('out.txt')])
+})
+
+// Loop pass 1 (2026-10-11, live, in a peer pod): the fence refused this read of the heartbeats.
+// `paste` was a word it could not vouch for. paste, nl and column only read and print.
+test('a read of the heartbeats piped through paste, nl or column makes no write (loop pass 1)', () => {
+  const live =
+    "ls -la ~/.claude/state/witness-sonar/2026-10-11/ && cat ~/.claude/state/witness-sonar/2026-10-11/*.json | sed 's/}{/}\\n{/g' | " +
+    `grep -o '"name":"[^"]*"' | paste - - - - ; ls ~/.claude/state/witness-sonar/hands 2>/dev/null`
+  expect(bash(live).writes).toEqual([])
+  expect(bash('nl a.txt | column -t').writes).toEqual([])
+  // An interpreter's code is still opaque, and a redirect from one of them is still a write.
+  expect(bash('python -c "print(1)"').writes).toEqual([other('other:shell')])
+  expect(bash('paste a b > out.txt').writes).toEqual([fw('out.txt')])
 })
 
 // Found by F1's probe: `$((...))` was taken to run nothing, so a command inside it went unseen.

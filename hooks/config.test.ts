@@ -3,6 +3,7 @@ import { test, expect } from 'claude-code/testing'
 import {
   DEFAULT_WRITERS,
   isCloseCommand,
+  isSqlTool,
   listOf,
   normalizePath,
   onWords,
@@ -10,6 +11,7 @@ import {
   readConfig,
   scriptCandidates,
   sonarOn,
+  sqlToolPattern,
   typedHandsStart,
   writerPattern,
 } from './config'
@@ -29,11 +31,14 @@ import { usageDir } from './usage'
 
 const ask = (id: string, text: string) => ({ id, text, source: 'ask' as const, state: 'open' as const, claimId: null, at: 1 })
 
-test('with no options the defaults are the estate: its writers, .claude/sessions, ## Goals, /close, you', () => {
+test('with no options the defaults are neutral: no writers, any __execute_sql tool, public, .claude/sessions, ## Goals, /close, you', () => {
   const c = readConfig(undefined)
   expect(c.ticketScript).toEqual('')
   expect(c.watchScript).toEqual('')
-  expect(c.writers).toEqual([...DEFAULT_WRITERS])
+  expect(DEFAULT_WRITERS).toEqual([])
+  expect(c.writers).toEqual([])
+  expect(c.sqlTools).toEqual(['mcp__*__execute_sql'])
+  expect(c.tableSchemas).toEqual(['public'])
   expect([c.sessionsDir, c.goalsHeading, c.closeCommands, c.person]).toEqual(['.claude/sessions', '## Goals', ['/close'], 'you'])
 })
 
@@ -89,9 +94,35 @@ test('a configured script is the only candidate, relative to the session folder 
   expect(scriptCandidates('D:\\t\\ticket.py', 'C:/mod', 'C:/work/proj', 'scripts/x.py')).toEqual(['D:/t/ticket.py'])
 })
 
-test('the default writer pattern finds what the estate list names; a custom list replaces it; none finds none', () => {
-  const q = "SELECT workspace.close_todo('x'), workspace.crosstalk_resolve(1), app.finish_task(2)"
-  expect(writerCalls(q, writerPattern([...DEFAULT_WRITERS]))).toEqual(['workspace.close_todo', 'workspace.crosstalk_resolve'])
+test('sqlTools: a comma list with * anywhere; blank falls back; the neutral default matches any __execute_sql tool', () => {
+  const dflt = sqlToolPattern(readConfig({}).sqlTools)
+  expect(isSqlTool('mcp__claude_ai_Supabase__execute_sql', dflt)).toBe(true)
+  expect(isSqlTool('mcp__acme_db__execute_sql', dflt)).toBe(true)
+  expect(isSqlTool('mcp__acme_db__execute_sql_batch', dflt)).toBe(false)
+  expect(isSqlTool('mcp__acme_db__run_query', dflt)).toBe(false)
+  expect(isSqlTool('execute_sql', dflt)).toBe(false)
+  expect(isSqlTool('Bash', dflt)).toBe(false)
+  expect(isSqlTool(undefined, dflt)).toBe(false)
+  expect(readConfig({ sqlTools: ' ' }).sqlTools).toEqual(['mcp__*__execute_sql'])
+  expect(readConfig({ sqlTools: 'mcp__a__q, mcp__b__*' }).sqlTools).toEqual(['mcp__a__q', 'mcp__b__*'])
+  const custom = sqlToolPattern(['mcp__a__q', 'mcp__b__*'])
+  expect([isSqlTool('mcp__a__q', custom), isSqlTool('mcp__b__anything', custom), isSqlTool('mcp__a__qq', custom), isSqlTool('xmcp__a__q', custom)]).toEqual([true, true, false, false])
+  // A dot or other regex character in a name is not a wildcard, and a bad entry is dropped.
+  expect(isSqlTool('mcp__aXb__q', sqlToolPattern(['mcp__a.b__q']))).toBe(false)
+  expect(sqlToolPattern(['bad name;'])).toBeNull()
+  expect(sqlToolPattern([])).toBeNull()
+  expect(isSqlTool('mcp__a__q', null)).toBe(false)
+})
+
+test('tableSchemas: a comma list of plain names, public by default', () => {
+  expect(readConfig({ tableSchemas: 'public, app' }).tableSchemas).toEqual(['public', 'app'])
+  expect(readConfig({ tableSchemas: 'bad name;' }).tableSchemas).toEqual(['public'])
+})
+
+test('the default writer pattern finds nothing; a configured list is the only source; none finds none', () => {
+  const q = "SELECT acme.close_task('x'), app.finish_task(2)"
+  expect(writerCalls(q, writerPattern([...DEFAULT_WRITERS]))).toEqual([])
+  expect(writerCalls(q)).toEqual([])
   expect(writerCalls(q, writerPattern(['app.finish_*']))).toEqual(['app.finish_task'])
   expect(writerPattern([])).toBeNull()
   expect(writerCalls(q, null)).toEqual([])

@@ -36,6 +36,25 @@ export function projectKey(cwd: string): string {
   return cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
+export const ROOT_WALK_MAX = 40
+
+/**
+ * The repository root of a folder (1.11.1, "Repo root, retire stray"): the nearest folder at or above
+ * `cwd` holding a `.git` entry (a folder, or a file as in a git worktree), forward slashes, case kept;
+ * null when none is found within ROOT_WALK_MAX levels. `exists` is injected so this stays pure; a check
+ * that throws counts as absent. A drive root comes back as `C:` and the filesystem root as ''.
+ */
+export async function rootOf(cwd: string, exists: (path: string) => Promise<boolean>): Promise<string | null> {
+  let dir = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  for (let i = 0; i < ROOT_WALK_MAX; i += 1) {
+    if (await exists(`${dir}/.git`).catch(() => false)) return dir
+    const cut = dir.lastIndexOf('/')
+    if (cut < 0) return null
+    dir = dir.slice(0, cut)
+  }
+  return null
+}
+
 export function storeKeys(key: string): {
   carry: string
   friction: string
@@ -258,12 +277,43 @@ const PASTED = /<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content\b[^>]*>/g
 const TACKLE_END = 'Done means witnessed'
 
 /**
+ * What the Ammonite's `send` writes (ammonite 0.5: its SEND_PREFIX, then the case as a bold title
+ * and `- ` points). A literal, not an import: one plugin never imports from another's folder.
+ */
+const AMMONITE_SENT = 'The Ammonite objects: "'
+const CASE_TITLE = /^\s*\*\*.+\*\*\s*$/
+const CASE_POINT = /^\s*- /
+
+/**
+ * A sent Ammonite heckle and the case under it cut (1.3.7, ruled by Bradley 2026-10-11: "quoted, no
+ * ask"). They are the Ammonite's words, and the case's last point says what to do, which must never
+ * become his ask. The objection runs to the last quote on its line, and the case is the bold title
+ * line and the `- ` lines straight after it. His own words before, after the quote, or after the
+ * case are kept. A paste with the prefix edited away is ordinary text.
+ */
+export function withoutAmmonite(text: string): string {
+  const at = text.indexOf(AMMONITE_SENT)
+  if (at === -1) return text
+  const lines = text.slice(at + AMMONITE_SENT.length).split('\n')
+  const first = lines[0] ?? ''
+  const close = first.lastIndexOf('"')
+  const after = close === -1 ? '' : first.slice(close + 1)
+  let i = 1
+  if (CASE_TITLE.test(lines[i] ?? '')) {
+    i++
+    while (i < lines.length && CASE_POINT.test(lines[i] ?? '')) i++
+  }
+  const tail = [after, ...lines.slice(i)].join('\n')
+  return withoutAmmonite(`${text.slice(0, at)} [the Ammonite's objection] ${tail}`)
+}
+
+/**
  * A prompt with what Bradley quoted cut out: a pasted block, and a /tackle prompt quoted
  * inside his own words (seen live, S166: pasting 405_85labs' /tackle to talk about it minted
  * five of 85labs' asks as his). A /tackle prompt sent whole is skipped before this.
  */
 export function withoutQuoted(text: string): string {
-  const unpasted = text.replace(PASTED, ' [pasted text] ')
+  const unpasted = withoutAmmonite(text.replace(PASTED, ' [pasted text] '))
   const title = unpasted.indexOf(TACKLE_TITLE)
   if (title === -1) return unpasted
   const skill = /\/\S+\s+$/.exec(unpasted.slice(0, title))

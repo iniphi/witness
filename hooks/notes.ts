@@ -11,6 +11,7 @@
 
 import type { Candidate, Friction, Observed, Spoken } from '../types'
 import { cleanText, normalise, parseJsonObject } from './asks'
+import { GAP_CHARS, GAP_WHY, MAX_GAP_CANDIDATES, hasProcedureShape, isTestAfterEditHook } from './charter'
 
 export const SPOKEN_CAP = 60
 export const NOTES_CAP = 25
@@ -82,12 +83,128 @@ export function notesSection(o: { friction: readonly Friction[]; spoken: readonl
   return more > 0 ? [...head, ...kept, `- ... and ${more} more`] : [...head, ...kept]
 }
 
-/** This session's main-session calls, one short line each, newest last. */
-export function callDigest(observed: readonly Observed[], max = DIGEST_CALLS): string[] {
+/**
+ * Turn tags (1.8, Bradley 2026-10-11): a parallel batch of calls inside one turn is one event, not
+ * several. Each distinct turn id gets `[t1]`, `[t2]` ... in order of first appearance among the
+ * main-session calls; calls recorded without a turn get no tag.
+ */
+export function turnTagMap(observed: readonly Observed[]): Map<string, string> {
+  const tags = new Map<string, string>()
+  for (const o of observed) {
+    if (o.agent || o.turn === undefined || tags.has(o.turn)) continue
+    tags.set(o.turn, `[t${tags.size + 1}]`)
+  }
+  return tags
+}
+
+const tagged = (tag: string | undefined, text: string): string => (tag === undefined ? text : `${tag} ${text}`)
+
+/**
+ * A short, stable session tag (Bradley, 2026-10-11, "Two sessions"): five hex characters of an
+ * FNV-1a hash of the session id, so the band, the print and the public export never carry a
+ * session id. `?` is the one unknown session: friction stored before sessions were kept.
+ */
+export function sessionTag(id: string | undefined): string {
+  if (id === undefined || id === '') return '?'
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193) >>> 0
+  return h.toString(16).padStart(8, '0').slice(0, 5)
+}
+
+const sessionTagged = (session: string | undefined, turn: string | undefined): string | undefined => {
+  if (session === undefined) return turn
+  return `[s${session}${turn === undefined ? '' : ` ${turn}`}]`
+}
+
+/** `t3` out of a `[t3]` turn tag. */
+const turnPart = (tag: string | undefined): string | undefined => (tag === undefined ? undefined : tag.slice(1, -1))
+
+/**
+ * This session's main-session calls, one short line each, newest last, each tagged with its turn.
+ * With `session` (this session's tag) the tag is `[s3f2a t2]`, so a quoted tag names a session.
+ */
+export function callDigest(observed: readonly Observed[], max = DIGEST_CALLS, session?: string): string[] {
+  const tags = turnTagMap(observed)
   return observed
     .filter(o => !o.agent)
     .slice(-max)
-    .map(o => one(`${o.tool}: ${o.input}`, DIGEST_CHARS))
+    .map(o => {
+      const turn = o.turn === undefined ? undefined : tags.get(o.turn)
+      const tag = session === undefined ? turn : sessionTagged(session, turnPart(turn))
+      return tagged(tag, one(`${o.tool}: ${o.input}`, DIGEST_CHARS))
+    })
+}
+
+/** Friction with the session and turn it fell in, when known. */
+export type TaggedFriction = Friction & { tag?: string }
+
+/**
+ * Each friction tagged. With `self` (this session's id): friction of another session carries only
+ * its session, `[s9c41]` (turn ids restart in each session, so its turn means nothing here);
+ * friction with no session is the one unknown session, `[s?]`; this session's own carries the turn
+ * of the latest main-session call at or before it, `[s3f2a t2]`. Without `self`, turn tags only.
+ */
+export function tagFriction(friction: readonly Friction[], observed: readonly Observed[], self?: string): TaggedFriction[] {
+  const tags = turnTagMap(observed)
+  const calls = observed.filter(o => !o.agent && o.turn !== undefined).sort((a, b) => a.at - b.at)
+  return friction.map(f => {
+    if (self !== undefined && f.session !== self) return { ...f, tag: `[s${sessionTag(f.session)}]` }
+    let turn: string | undefined
+    for (const o of calls) {
+      if (o.at > f.at) break
+      turn = o.turn
+    }
+    const turnTag = turn === undefined ? undefined : tags.get(turn)
+    const tag = self === undefined ? turnTag : sessionTagged(sessionTag(self), turnPart(turnTag))
+    return tag === undefined ? { ...f } : { ...f, tag }
+  })
+}
+
+const TAG_RE = /\[(?:s[0-9a-f?]{1,6}\s+)?t(\d+)\]/g
+const SESSION_RE = /\[s([0-9a-f]{4,6}|\?)(?:\s+t\d+)?\]/g
+
+/** How many distinct turn tags a text cites. */
+export function distinctTurns(text: string): number {
+  return new Set([...text.matchAll(TAG_RE)].map(m => m[1])).size
+}
+
+/** How many distinct SESSION tags a text cites (`[s3f2a t2]`, `[s9c41]`, `[s?]`): a jewel needs two. */
+export function distinctSessions(text: string): number {
+  return new Set([...text.matchAll(SESSION_RE)].map(m => m[1])).size
+}
+
+/** A script in the session repo's scripts/ folder, with its first docstring or comment line. */
+export type ScriptNote = { name: string; summary: string }
+/** The `#`/`##` headings of one CLAUDE.md the session loads. */
+export type HeadingNote = { file: string; headings: readonly string[] }
+
+export const MAX_SCRIPTS = 40
+export const MAX_HEADINGS = 40
+const SCRIPT_SUMMARY = 80
+
+/** The first docstring or comment line of a script's text; '' when it has none. Pure. */
+export function scriptSummary(text: string): string {
+  for (const raw of text.split(/\r?\n/).slice(0, 25)) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#!') || /^(["']{3}|\/\*+)$/.test(line)) continue
+    const m = /^(?:#+|\/\/+|--|rem\b|\/\*+|\*|"""|''')\s*(.*?)(?:\*\/|"""|''')?$/i.exec(line)
+    if (m !== null && m[1] !== undefined && m[1].trim() !== '') return one(m[1], SCRIPT_SUMMARY)
+    if (m === null) return ''
+  }
+  return ''
+}
+
+/** The `#` and `##` headings of a markdown text, in order. Pure. */
+export function mdHeadings(text: string): string[] {
+  const out: string[] = []
+  let fenced = false
+  for (const raw of text.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(raw)) fenced = !fenced
+    if (fenced) continue
+    const m = /^(#{1,2})\s+(.+?)\s*#*\s*$/.exec(raw)
+    if (m !== null && m[2] !== undefined) out.push(one(m[2], 70))
+  }
+  return out
 }
 
 /** Installed slash commands the candidate pass is shown, at most, and each description's length. */
@@ -139,16 +256,41 @@ const guardLine = (g: Guard): string => `- ${g.name} [${g.where}]: ${g.does}`
 
 /** The side pass's prompt: candidates only on evidence, strict JSON back. */
 export function candidatesPrompt(o: {
-  friction: readonly Friction[]
+  friction: readonly (Friction | TaggedFriction)[]
   calls: readonly string[]
   existing: readonly Candidate[]
   /** Installed commands and skills (a field report): never proposed again as skills. */
   installed?: ReadonlyArray<{ name: string; description: string }>
   /** The guards to name (1.0): the estate's list where the estate is present, else none. */
   guards?: readonly Guard[]
+  /** The session repo's scripts (1.8): what already exists. Omitted from the prompt when empty. */
+  scripts?: readonly ScriptNote[]
+  /** The headings of the CLAUDE.md files the session loads (1.8). Omitted from the prompt when empty. */
+  headings?: readonly HeadingNote[]
+  /** Routine heads seen in two or more sessions (1.9), from `sharedRoutines`. Omitted from the prompt when empty. */
+  routines?: readonly string[]
+  /** Titles of jewels dismissed in any project (1.11). Omitted from the prompt when empty. */
+  dismissed?: readonly string[]
+  /** The hooks actually configured (1.11), `- event matcher: script` lines. `undefined` omits the section. */
+  hooks?: readonly string[]
 }): string {
   const guards = (o.guards ?? INSTALLED_GUARDS).map(guardLine)
-  const friction = o.friction.slice(-60).map(f => `- ${f.kind} ${one(f.key, 80)}: ${one(f.detail, 100)}`)
+  const dismissed = (o.dismissed ?? []).slice(0, 40)
+  const friction = o.friction.slice(-60).map(f => {
+    const tag = (f as TaggedFriction).tag
+    return `- ${tagged(tag, `${f.kind} ${one(f.key, 80)}: ${one(f.detail, 100)}`)}`
+  })
+  const scripts = (o.scripts ?? []).slice(0, MAX_SCRIPTS).map(x => `- scripts/${x.name}${x.summary === '' ? '' : `: ${one(x.summary, SCRIPT_SUMMARY)}`}`)
+  let room = MAX_HEADINGS
+  const headings = (o.headings ?? []).flatMap(h => {
+    const take = h.headings.slice(0, Math.max(room, 0))
+    room -= take.length
+    return take.length === 0 ? [] : [`- ${h.file}: ${take.join(' | ')}`]
+  })
+  const covered = [
+    ...(scripts.length > 0 ? ['', 'Scripts already in the repo (scripts/):', ...scripts] : []),
+    ...(headings.length > 0 ? ['', 'Headings of the CLAUDE.md files the session loads:', ...headings] : []),
+  ]
   const existing = o.existing.map(c => `- [${c.kind}] ${c.title}`)
   const installed = (o.installed ?? []).slice(0, MAX_INSTALLED).map(c => `- /${c.name}: ${one(c.description, INSTALLED_DESC)}`)
   return [
@@ -158,24 +300,44 @@ export function candidatesPrompt(o: {
     '- SKILL: a multi-step manual sequence (three or more steps) done two or more times, that a named procedure could run. Evidence: the repeated calls.',
     'Never propose a skill that an installed command already covers, even if the session did the steps by hand.',
     'Never propose a hook or guard that an installed guard or mod already covers, even if the friction shows it firing: that is the guard working.',
+    'Never propose a script or skill for a job that a script listed below or a CLAUDE.md heading listed below already covers: if the friction is that the existing route was missed, that is not a candidate.',
+    'Calls and friction carry a tag such as [s3f2a t3]: s3f2a names the SESSION, t3 the turn within it. Friction from other sessions carries the session alone, [s9c41]; [s?] is one session whose id was not kept. Calls in one turn (one parallel message) are ONE event, however many lines they take.',
+    'A candidate needs evidence from at least TWO DIFFERENT SESSIONS: quote the tags, for example "[s3f2a t2] ... [s9c41] ...". Repeats within one session, however many turns, are recorded but never minted: one session is never a pattern, and a one-off repair is not a procedure worth automating.',
+    'One candidate per ROOT CAUSE: several symptoms of one fault are one jewel, not several.',
+    'A fault that the instructions (CLAUDE.md headings, scripts) record as fixed, with a dated line, after the evidence is not a candidate.',
+    'Evidence counts the tool calls themselves, never text echoed back into the transcript (the content of a file, the text of a jewel).',
+    'A single tool call (one Grep, one external command) is not a procedure. A SKILL needs a sequence of at least two different kinds of call, and its evidence must cite them.',
+    'Prefer "a script beside the helper that already does half" over a skill when a listed script is close.',
+    'A hook candidate may not claim that a hook exists, or restate one, unless it is in the list of configured hooks below.',
+    'Never propose a hook that runs tests, typecheck or build after an edit: that is test-first work, the red phase is expected.',
+    `One exception to the two-session rule, at most ${MAX_GAP_CANDIDATES} per pass: a candidate from ONE session survives only if it names a GAP in "gap": a gate that does not run (a typecheck or test that skipped a folder, so did not cover what failed), or a check rebuilt by hand each sitting that no listed script holds. Quote the concrete gate or check. Without a real gap, one session is not a candidate.`,
     'Quote the log in "evidence". Skip anything already proposed. If nothing qualifies, return {"candidates": []}.',
+    'Each candidate must also carry "uncovered": a short reason that nothing listed below (installed commands, guards, scripts, CLAUDE.md headings) already does this job. A candidate without it is dropped.',
     `At most ${MAX_CANDIDATES}. Reply with strict JSON only:`,
-    '{"candidates": [{"kind": "hook" | "skill", "title": "<= 80 chars", "why": "<= 160 chars", "evidence": "<= 200 chars"}]}',
+    `{"candidates": [{"kind": "hook" | "skill", "title": "<= 80 chars", "why": "<= 160 chars", "evidence": "<= 200 chars, with turn tags", "uncovered": "<= 120 chars", "gap": "<= ${GAP_CHARS} chars, ONLY for a one-session candidate"}]}`,
     '',
     'Already proposed:',
     ...(existing.length > 0 ? existing : ['- (none)']),
+    ...(dismissed.length > 0
+      ? ['', 'Shapes dismissed before (do not propose these again in any wording):', ...dismissed.map(d => `- ${d}`)]
+      : []),
+    ...(o.hooks === undefined ? [] : ['', 'Hooks configured (settings files; event, matcher, script):', ...(o.hooks.length > 0 ? o.hooks : ['- (none)'])]),
     '',
     'Installed commands:',
     ...(installed.length > 0 ? installed : ['- (none listed)']),
     '',
     'Installed guards and mods:',
     ...(guards.length > 0 ? guards : ['- (none listed)']),
+    ...covered,
     '',
     'Friction:',
     ...(friction.length > 0 ? friction : ['- (none)']),
     '',
     'Tool calls, oldest first:',
     ...(o.calls.length > 0 ? o.calls.map(c => `- ${c}`) : ['- (none)']),
+    ...((o.routines ?? []).length > 0
+      ? ['', 'Routines seen in two or more sessions (the call head, then each session with its calls and turns; a SKILL candidate may cite one by its session tags):', ...(o.routines ?? [])]
+      : []),
   ].join('\n')
 }
 
@@ -192,17 +354,32 @@ export function parseCandidates(
   if (!Array.isArray(raw)) return []
   const seen = new Set(existing.map(c => c.key))
   const out: Candidate[] = []
+  let gapUsed = 0
   for (const item of raw) {
-    const x = item as { kind?: unknown; title?: unknown; why?: unknown; evidence?: unknown }
+    const x = item as { kind?: unknown; title?: unknown; why?: unknown; evidence?: unknown; uncovered?: unknown; gap?: unknown }
     if (x?.kind !== 'hook' && x?.kind !== 'skill') continue
+    // The covered check (1.8): a candidate must say why nothing that exists covers it.
+    if (typeof x.uncovered !== 'string' || cleanText(x.uncovered) === '') continue
+    // Two sessions (Bradley, 2026-10-11): evidence from one session is recorded, never minted. This
+    // subsumes 1.8's two-turn check (two sessions are two turns); turn tags stay for grouping.
+    // Exception (1.11, "Gap exception"): one session survives only when it names a gap, and at most
+    // one such candidate a pass.
+    const sessions = distinctSessions(typeof x.evidence === 'string' ? x.evidence : '')
+    const gap = typeof x.gap === 'string' ? one(x.gap, GAP_CHARS) : ''
+    const viaGap = sessions < 2
+    if (viaGap && (sessions < 1 || gap === '' || gapUsed >= MAX_GAP_CANDIDATES)) continue
     const title = one(typeof x.title === 'string' ? x.title : '', TITLE_CHARS)
     if (title === '') continue
+    // The charter's shape rules (1.11): no test-after-edit hook; a skill is a procedure of 2+ call heads.
+    if (x.kind === 'hook' && isTestAfterEditHook(title)) continue
+    if (x.kind === 'skill' && !hasProcedureShape(typeof x.evidence === 'string' ? x.evidence : '')) continue
     const key = candidateKey(x.kind, title)
     if (seen.has(key)) continue
     seen.add(key)
-    const why = one(typeof x.why === 'string' ? x.why : '', WHY_CHARS)
+    const why = one(viaGap ? `${GAP_WHY}: ${gap}. ${typeof x.why === 'string' ? x.why : ''}` : typeof x.why === 'string' ? x.why : '', WHY_CHARS)
     if (coveringGuard({ kind: x.kind, title, why }, guards) !== null) continue
     const evidence = one(typeof x.evidence === 'string' ? x.evidence : '', EVIDENCE_CHARS)
+    if (viaGap) gapUsed += 1
     out.push({ key, kind: x.kind, title, why, evidence, at, filed: false })
     if (out.length >= MAX_CANDIDATES) break
   }
@@ -213,9 +390,72 @@ export function mergeCandidates(existing: readonly Candidate[], fresh: readonly 
   return [...existing, ...fresh].slice(-CANDIDATES_KEPT)
 }
 
+/**
+ * The project's stored candidates and this session's, merged by key (1.7.1, Bradley 2026-10-11:
+ * "when a skill or hook is taken it reappears in the jewel section"). Every live session holds the
+ * list it loaded at its start, and writing that copy whole put back a jewel another session had
+ * settled: the one-slot problem friction and carry already had. So what is stored is kept, a
+ * settled jewel never goes back to unsettled, and a filed one never back to unfiled. Stored order
+ * first, this session's new keys after, then the cap keeps the newest.
+ */
+export function mergeCandidatesByKey(stored: readonly Candidate[], mine: readonly Candidate[]): Candidate[] {
+  const byKey = new Map<string, Candidate>()
+  for (const c of [...stored, ...mine]) {
+    const had = byKey.get(c.key)
+    if (had === undefined) {
+      byKey.set(c.key, { ...c })
+      continue
+    }
+    const settled = had.settled ?? c.settled
+    const merged: Candidate = { ...had, ...c, filed: had.filed || c.filed }
+    byKey.set(c.key, settled === undefined ? withoutSettled(merged) : { ...merged, settled })
+  }
+  return [...byKey.values()].slice(-CANDIDATES_KEPT)
+}
+
+function withoutSettled(c: Candidate): Candidate {
+  const { settled: _settled, ...rest } = c
+  return rest
+}
+
+/**
+ * A stray subfolder slot folded into the project's own (1.11.1, "Repo root, retire stray"): its
+ * candidates are merged by key, each unsettled one marked `retired` (and filed, so the running
+ * candidates file never takes it). A settled one keeps its settle, and the project's own settled
+ * jewel is never overwritten (`mergeCandidatesByKey`). Pure and idempotent.
+ */
+export function retireStrays(own: readonly Candidate[], strays: ReadonlyArray<readonly Candidate[]>, now: number): Candidate[] {
+  const room = Math.max(0, CANDIDATES_KEPT - own.length)
+  const retired = strays
+    .flat()
+    .map(c => (c.settled === undefined ? { ...c, filed: true, settled: { how: 'retired' as const, at: now } } : { ...c }))
+    .sort((a, b) => a.at - b.at)
+    .slice(room === 0 ? Infinity : -room)
+  return mergeCandidatesByKey(own, retired)
+}
+
 export function markFiled(candidates: readonly Candidate[], keys: readonly string[]): Candidate[] {
   const filed = new Set(keys)
   return candidates.map(c => (filed.has(c.key) ? { ...c, filed: true } : { ...c }))
+}
+
+/**
+ * The candidates still waiting on the person (1.5, the gem): those with no `settled`. `filed` is
+ * not settled, since filing is the automatic append at /wrap and must not take a gem off.
+ */
+export function unsettled(candidates: readonly Candidate[]): Candidate[] {
+  return candidates.filter(c => c.settled === undefined)
+}
+
+/** The candidates with these keys settled, merged by key; the rest are copied untouched. */
+export function settleCandidatesIn(candidates: readonly Candidate[], keys: readonly string[], how: 'taken' | 'dismissed', at: number): Candidate[] {
+  const set = new Set(keys)
+  return candidates.map(c => (set.has(c.key) && c.settled === undefined ? { ...c, settled: { how, at } } : { ...c }))
+}
+
+/** What `take` puts in the prompt box: the candidate, and a request to build it or say why not. */
+export function takePrompt(c: Candidate): string {
+  return `A witness ${c.kind} candidate: ${c.title}. Why: ${c.why}. Evidence: ${c.evidence}. Propose how to build it as a ${c.kind}, or say why it should not be built.`
 }
 
 /** Is a candidate pass due? Both the interval and enough new calls since the last one. */
@@ -228,7 +468,7 @@ const candidateLine = (c: Candidate): string =>
 
 /** The print's candidates section: this watch's proposals. */
 export function candidatesSection(candidates: readonly Candidate[], since: number): string[] {
-  const now = candidates.filter(c => c.at >= since)
+  const now = candidates.filter(c => c.at >= since && c.settled?.how !== 'retired')
   const head = ['### Hook and skill candidates', '']
   return now.length === 0 ? [...head, '- None proposed.'] : [...head, ...now.map(candidateLine)]
 }

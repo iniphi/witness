@@ -7,6 +7,8 @@ import {
   HEADS_UP,
   INSTALLED_GUARDS,
   MAX_CANDIDATES,
+  MAX_HEADINGS,
+  MAX_SCRIPTS,
   SPOKEN_CAP,
   appendCandidates,
   callDigest,
@@ -14,14 +16,25 @@ import {
   candidatesPrompt,
   candidatesSection,
   coveringGuard,
+  distinctSessions,
+  distinctTurns,
   markFiled,
+  mdHeadings,
   mergeCandidates,
+  mergeCandidatesByKey,
   notesSection,
   noteHeard,
   noteSpoken,
   parseCandidates,
+  scriptSummary,
+  sessionTag,
   shouldScan,
+  tagFriction,
 } from './notes'
+
+/** Evidence citing two sessions, and a reason nothing listed covers the job: what a kept candidate carries. */
+const EV = '[s3f2a t1] first [s9c41 t2] second'
+const U = 'no listed script or guard does this'
 
 const fr = (kind: Friction['kind'], key: string, at: number, detail = 'd'): Friction => ({ kind, key, at, detail })
 const sp = (header: string, text: string, at: number): Spoken => ({ header, text, at })
@@ -137,10 +150,10 @@ test('candidatesPrompt lists the installed guards and mods and proposes no hook 
 
 test('a hook candidate an installed guard already covers is filtered; a new hook and a skill are not', () => {
   const reply = JSON.stringify({ candidates: [
-    { kind: 'hook', title: 'Confirm before execute_sql runs a write', why: 'two writes went out unchecked', evidence: 'e' },
-    { kind: 'hook', title: 'Block heredoc file writes', why: 'w', evidence: 'e' },
-    { kind: 'hook', title: 'Warn when a Notion page fetch returns 404', why: 'w', evidence: 'e' },
-    { kind: 'skill', title: 'Confirm before execute_sql runs a write', why: 'w', evidence: 'e' },
+    { kind: 'hook', title: 'Confirm before execute_sql runs a write', why: 'two writes went out unchecked', evidence: EV, uncovered: U },
+    { kind: 'hook', title: 'Block heredoc file writes', why: 'w', evidence: EV, uncovered: U },
+    { kind: 'hook', title: 'Warn when a Notion page fetch returns 404', why: 'w', evidence: EV, uncovered: U },
+    { kind: 'skill', title: 'Confirm before execute_sql runs a write', why: 'w', evidence: EV, uncovered: U },
   ] })
   const got = parseCandidates(reply, [], 1)
   expect(got.map(c => `${c.kind}:${c.title}`)).toEqual([
@@ -152,18 +165,126 @@ test('a hook candidate an installed guard already covers is filtered; a new hook
 })
 
 test('parseCandidates is tolerant, validates kind, dedupes against the existing, and caps', () => {
+  const tail = `"evidence":"${EV}","uncovered":"${U}"`
   const reply = '```json\n{"candidates":[' +
-    '{"kind":"hook","title":"Guard bare UPDATEs","why":"w","evidence":"e"},' +
-    '{"kind":"skill","title":"Commit and push one path","why":"done 4 times","evidence":"git add / commit / push"},' +
-    '{"kind":"script","title":"bad kind","why":"w","evidence":"e"},' +
-    '{"kind":"skill","title":"","why":"w","evidence":"e"},' +
-    '{"kind":"skill","title":"Commit and push one path","why":"dup","evidence":"e"}]}\n```'
+    `{"kind":"hook","title":"Guard bare UPDATEs","why":"w",${tail}},` +
+    `{"kind":"skill","title":"Commit and push one path","why":"done 4 times","evidence":"[s3f2a t1] git add / [s9c41 t4] commit / push","uncovered":"${U}"},` +
+    `{"kind":"script","title":"bad kind","why":"w",${tail}},` +
+    `{"kind":"skill","title":"","why":"w",${tail}},` +
+    `{"kind":"skill","title":"Commit and push one path","why":"dup",${tail}}]}\n\`\`\``
   const got = parseCandidates(reply, [cand('Guard bare UPDATEs')], 99)
   expect(got.map(c => c.title)).toEqual(['Commit and push one path'])
   expect(got[0]).toMatchObject({ kind: 'skill', at: 99, filed: false })
   expect(parseCandidates('no json here', [], 1)).toEqual([])
-  const many = JSON.stringify({ candidates: Array.from({ length: 9 }, (_, i) => ({ kind: 'hook', title: `t${i}`, why: 'w', evidence: 'e' })) })
+  const many = JSON.stringify({ candidates: Array.from({ length: 9 }, (_, i) => ({ kind: 'hook', title: `t${i}`, why: 'w', evidence: EV, uncovered: U })) })
   expect(parseCandidates(many, [], 1).length).toBe(MAX_CANDIDATES)
+})
+
+// Jewel 1 of the 2026-10-11 calibration: a skill proposed for a job a script already did.
+test('candidatesPrompt carries the scripts and CLAUDE.md headings, and omits both cleanly when absent', () => {
+  const bare = candidatesPrompt({ friction: [], calls: [], existing: [] })
+  expect(bare).not.toContain('Scripts already in the repo')
+  expect(bare).not.toContain('Headings of the CLAUDE.md')
+  const empty = candidatesPrompt({ friction: [], calls: [], existing: [], scripts: [], headings: [] })
+  expect(empty).toBe(bare)
+  const p = candidatesPrompt({
+    friction: [], calls: [], existing: [],
+    scripts: [{ name: 'sync-things.py', summary: 'Copies the global tools into the repo' }, { name: 'bare.sh', summary: '' }],
+    headings: [{ file: 'CLAUDE.md', headings: ['Commands', 'Scope'] }, { file: '~/.claude/CLAUDE.md', headings: ['Identity'] }],
+  })
+  expect(p).toContain('- scripts/sync-things.py: Copies the global tools into the repo')
+  expect(p).toContain('- scripts/bare.sh')
+  expect(p).toContain('- CLAUDE.md: Commands | Scope')
+  expect(p).toContain('- ~/.claude/CLAUDE.md: Identity')
+  expect(p).toContain('"uncovered"')
+  expect(p.indexOf('Scripts already in the repo') < p.indexOf('Friction:')).toBe(true)
+})
+
+test('the scripts and headings lists are capped', () => {
+  const scripts = Array.from({ length: MAX_SCRIPTS + 10 }, (_, i) => ({ name: `s${i}.py`, summary: 'x' }))
+  const headings = [{ file: 'CLAUDE.md', headings: Array.from({ length: MAX_HEADINGS + 10 }, (_, i) => `H${i}`) }]
+  const p = candidatesPrompt({ friction: [], calls: [], existing: [], scripts, headings })
+  expect(p).toContain(`s${MAX_SCRIPTS - 1}.py`)
+  expect(p).not.toContain(`s${MAX_SCRIPTS}.py`)
+  expect(p).toContain(`H${MAX_HEADINGS - 1}`)
+  expect(p).not.toContain(`H${MAX_HEADINGS}`)
+})
+
+test('scriptSummary and mdHeadings read the first comment line and the # and ## headings', () => {
+  expect(scriptSummary('#!/usr/bin/env python\n# Mirror the tools.\nimport os')).toBe('Mirror the tools.')
+  expect(scriptSummary('"""Sweep the mirror."""\nimport os')).toBe('Sweep the mirror.')
+  expect(scriptSummary('import os\n')).toBe('')
+  expect(mdHeadings('# One\ntext\n## Two\n### Three\n```\n# not a heading\n```\n## Four ##')).toEqual(['One', 'Two', 'Four'])
+})
+
+test('a candidate with no uncovered reason is dropped', () => {
+  const reply = JSON.stringify({ candidates: [
+    { kind: 'skill', title: 'No reason given', why: 'w', evidence: EV },
+    { kind: 'skill', title: 'Blank reason', why: 'w', evidence: EV, uncovered: '  ' },
+    { kind: 'skill', title: 'Reason given', why: 'w', evidence: EV, uncovered: U },
+  ] })
+  expect(parseCandidates(reply, [], 1).map(c => c.title)).toEqual(['Reason given'])
+})
+
+// Jewel 2 of the 2026-10-11 calibration: one parallel message of five refusals read as five retries.
+// Two sessions (Bradley, 2026-10-11): turns alone no longer suffice; a jewel needs two SESSIONS.
+test('a candidate whose evidence cites one session is dropped, however many turns; two sessions are kept', () => {
+  const reply = JSON.stringify({ candidates: [
+    { kind: 'hook', title: 'One turn only', why: 'w', evidence: '[s3f2a t3] refused x5 [s3f2a t3] again', uncovered: U },
+    { kind: 'hook', title: 'Many turns one session', why: 'w', evidence: '[s3f2a t1] a [s3f2a t4] b [s3f2a t9] c', uncovered: U },
+    { kind: 'hook', title: 'Old turn tags', why: 'w', evidence: '[t3] refused [t7] refused again', uncovered: U },
+    { kind: 'hook', title: 'No tags', why: 'w', evidence: 'refused five times', uncovered: U },
+    { kind: 'hook', title: 'Two sessions', why: 'w', evidence: '[s3f2a t3] refused [s9c41] refused again', uncovered: U },
+  ] })
+  expect(parseCandidates(reply, [], 1).map(c => c.title)).toEqual(['Two sessions'])
+})
+
+test('a legacy friction entry is one unknown session: it counts once, and with a known session makes two', () => {
+  const reply = (evidence: string): string => JSON.stringify({ candidates: [{ kind: 'hook', title: 'Legacy', why: 'w', evidence, uncovered: U }] })
+  expect(parseCandidates(reply('[s?] a [s?] b'), [], 1)).toEqual([])
+  expect(parseCandidates(reply('[s?] a [s3f2a t2] b'), [], 1)).toHaveLength(1)
+})
+
+test('sessionTag is a short stable hex tag that never carries the session id', () => {
+  const id = 'a09f0000-1111-4222-8333-444455556666'
+  const tag = sessionTag(id)
+  expect(tag).toMatch(/^[0-9a-f]{5}$/)
+  expect(sessionTag(id)).toBe(tag)
+  expect(sessionTag('other-session')).not.toBe(tag)
+  expect(id.includes(tag)).toBe(false)
+  expect(sessionTag(undefined)).toBe('?')
+  expect(sessionTag('')).toBe('?')
+})
+
+test('callDigest, friction and the prompt carry session tags; a parallel batch shares one turn', () => {
+  const t = (o: Observed, turn: string): Observed => ({ ...o, turn })
+  const calls = [t(ob('Agent', 'a', 1), 'u1'), t(ob('Agent', 'b', 2), 'u1'), t(ob('Agent', 'c', 3), 'u1'), t(ob('Bash', 'd', 10), 'u2'), ob('Read', 'old', 11)]
+  const me = sessionTag('self-session')
+  const digest = callDigest(calls, undefined, me)
+  expect(digest.slice(0, 3)).toEqual([`[s${me} t1] Agent: a`, `[s${me} t1] Agent: b`, `[s${me} t1] Agent: c`])
+  expect(digest[3]).toBe(`[s${me} t2] Bash: d`)
+  expect(digest[4]).toBe(`[s${me}] Read: old`)
+  const other = { ...fr('tool-failure', 'Agent', 2), session: 'other-session' }
+  const own = { ...fr('tool-failure', 'Bash', 12), session: 'self-session' }
+  const legacy = fr('tool-failure', 'Edit', 13)
+  const tagged = tagFriction([other, own, legacy], calls, 'self-session')
+  expect(tagged.map(f => f.tag)).toEqual([`[s${sessionTag('other-session')}]`, `[s${me} t2]`, '[s?]'])
+  const p = candidatesPrompt({ friction: tagged, calls: digest, existing: [] })
+  expect(p).toContain(`- [s${sessionTag('other-session')}] tool-failure Agent`)
+  expect(p).toContain(`- [s${me} t2] tool-failure Bash`)
+  expect(p).toContain('- [s?] tool-failure Edit')
+  expect(p).toContain(`- [s${me} t2] Bash: d`)
+  expect(p).toContain('TWO DIFFERENT SESSIONS')
+  expect(distinctTurns(`[s${me} t1] a [s${me} t1] b`)).toBe(1)
+  expect(distinctTurns('[t1] a [t2] b')).toBe(2)
+  expect(distinctSessions('[s3f2a t1] a [s3f2a t4] b')).toBe(1)
+  expect(distinctSessions('[s3f2a t1] a [s9c41] b [s?] c')).toBe(3)
+})
+
+test('with no session given, friction keeps its turn-only tag', () => {
+  const t = (o: Observed, turn: string): Observed => ({ ...o, turn })
+  const calls = [t(ob('Agent', 'a', 1), 'u1'), t(ob('Bash', 'd', 10), 'u2')]
+  expect(tagFriction([fr('tool-failure', 'Agent', 2), fr('tool-failure', 'Bash', 12)], calls).map(f => f.tag)).toEqual(['[t1]', '[t2]'])
 })
 
 test('shouldScan waits for both the interval and enough new calls', () => {
@@ -198,4 +319,26 @@ test('markFiled, mergeCandidates and candidatesPath', () => {
   expect(mergeCandidates([cand('A')], [cand('B')]).map(c => c.title)).toEqual(['A', 'B'])
   expect(candidatesPath('C:/x/proj', true)).toBe('C:/x/proj/reports/witness-candidates.md')
   expect(candidatesPath('C:/x/proj/', false)).toBe('C:/x/proj/.claude/witness-candidates.md')
+})
+
+// 1.7.1 (Bradley, 2026-10-11: "when a skill or hook is taken it reappears in the jewel section so
+// i have to redismiss it"): each live session wrote its start-time copy of the list whole, so a
+// jewel another session had settled came back. The store is merged by key, and settling holds.
+test('mergeCandidatesByKey keeps what is stored, and a settled or filed jewel never reverts', () => {
+  const taken = { ...cand('A'), settled: { how: 'taken' as const, at: 50 } }
+  const staleA = cand('A')
+  // Another session settled A; this session still holds A unsettled and has found B.
+  const merged = mergeCandidatesByKey([taken], [staleA, cand('B', 20)])
+  expect(merged.map(c => c.title)).toEqual(['A', 'B'])
+  expect(merged[0].settled).toEqual({ how: 'taken', at: 50 })
+  // The other order: a stale store and a fresh settle in this session also stays settled.
+  expect(mergeCandidatesByKey([staleA], [taken])[0].settled).toEqual({ how: 'taken', at: 50 })
+  // Filed is sticky too: filing at /wrap in either session is not undone by the other.
+  expect(mergeCandidatesByKey([cand('A', 10, true)], [cand('A', 10, false)])[0].filed).toBe(true)
+  expect(mergeCandidatesByKey([cand('A', 10, false)], [cand('A', 10, true)])[0].filed).toBe(true)
+  // Nothing stored: this session's list as it is; and the cap still keeps the newest.
+  expect(mergeCandidatesByKey([], [cand('C')]).map(c => c.title)).toEqual(['C'])
+  const many = Array.from({ length: 45 }, (_, i) => cand(`T${i}`, i))
+  expect(mergeCandidatesByKey(many, []).length).toBe(40)
+  expect(mergeCandidatesByKey(many, [])[0].title).toBe('T5')
 })

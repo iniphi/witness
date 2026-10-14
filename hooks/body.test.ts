@@ -1,6 +1,16 @@
 import { test, expect } from 'claude-code/testing'
-import { colourFor, moodFor, sizeFor, speechBox } from './body'
+import { bodyFromOption, colourFor, moodFor, speechBox } from './body'
 import type { MoodInput } from './body'
+
+test('bodyFromOption: naut and the older phi are the same nautilus; phial and unknown values as before', () => {
+  expect(bodyFromOption('naut')).toEqual('phi')
+  expect(bodyFromOption('phi')).toEqual('phi')
+  expect(bodyFromOption('phial')).toEqual('phial')
+  expect(bodyFromOption('flask')).toEqual('phi')
+  expect(bodyFromOption('')).toEqual('phi')
+  expect(bodyFromOption(undefined)).toEqual('phi')
+  expect(bodyFromOption(7)).toEqual('phi')
+})
 
 test('colourFor endpoints, midpoint and null', () => {
   expect(colourFor('phi', 0)).toEqual('#CFC8BC')
@@ -32,12 +42,6 @@ test('moodFor precedence', () => {
   expect(m({ claims: 2, asksDone: 1, asksTotal: 3 })).toEqual('calm')
 })
 
-test('sizeFor thresholds', () => {
-  expect(sizeFor({ moment: true, maxRows: 12, bodyColumns: 70 })).toEqual('full')
-  expect(sizeFor({ moment: true, maxRows: 11, bodyColumns: 70 })).toEqual('compact')
-  expect(sizeFor({ moment: true, maxRows: 12, bodyColumns: 69 })).toEqual('compact')
-  expect(sizeFor({ moment: false, maxRows: 40, bodyColumns: 200 })).toEqual('compact')
-})
 
 test('speechBox rows are exactly width wide with a header in the top border', () => {
   const rows = speechBox({ header: 'HELD', text: 'one two three four five six', width: 20, maxHeight: 10, tailRow: 1 })

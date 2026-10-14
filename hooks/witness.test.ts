@@ -405,14 +405,14 @@ test('no done-word, or an agent no call was seen from, mints nothing', () => {
 
 test('a report on no write develops when the main loop reads a target it names; naming none, it stays pale', () => {
   const l = agentCall(emptyLedger(), 'ag1', R('file', 'c:/x/a.ts'))
-  const named = report(l, 'ag1', 'Done: checked mods/witness/hooks/view.ts and workspace.todo_mirror.').ledger
+  const named = report(l, 'ag1', 'Done: checked mods/witness/hooks/view.ts and public.todo_mirror.').ledger
   expect(named.claims[0]?.names).toEqual([
     { kind: 'file', target: 'mods/witness/hooks/view.ts' },
-    { kind: 'sql', target: 'workspace.todo_mirror' },
+    { kind: 'sql', target: 'public.todo_mirror' },
   ])
   expect(call(named, 't2', R('file', '*')).claims[0]?.state).toBe('pale')
-  expect(agentCall(named, 'ag2', R('sql', 'workspace.todo_mirror')).claims[0]?.state).toBe('pale')
-  expect(call(named, 't2', R('sql', 'workspace.todo_mirror')).claims[0]?.state).toBe('developed')
+  expect(agentCall(named, 'ag2', R('sql', 'public.todo_mirror')).claims[0]?.state).toBe('pale')
+  expect(call(named, 't2', R('sql', 'public.todo_mirror')).claims[0]?.state).toBe('developed')
   expect(call(named, 't2', R('file', 'c:/repo/mods/witness/hooks/view.ts')).claims[0]?.state).toBe('developed')
   const bare = report(l, 'ag1', 'Done, all good.').ledger
   expect(bare.claims[0]?.names).toEqual([])

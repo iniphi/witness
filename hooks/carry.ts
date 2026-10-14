@@ -36,6 +36,17 @@ export function takeable(slot: CarrySlot, now: number, self: string): boolean {
   return slot.sessionId !== self && (slot.ended || now - slot.savedAt > CARRY_STALE_MS)
 }
 
+/**
+ * A session's OWN slot read back (1.3.6, F9, 2026-10-11: the laptop restarted, and the resumed
+ * conversation ran with an empty ledger while its own slot, never ended, sat stranded): the slot's
+ * asks this session does not already hold, by their text. A resumed process holds none and takes
+ * them all; a hot reload in the same process holds them all and takes none.
+ */
+export function ownLeftovers(slot: readonly Ask[], held: readonly Ask[]): Ask[] {
+  const have = new Set(held.map(a => normalise(a.text)))
+  return slot.filter(a => !have.has(normalise(a.text))).map(a => ({ ...a }))
+}
+
 /** Leftovers from several ended sessions as one list, the same ask (by its text) once. */
 export function mergeCarried(lists: ReadonlyArray<readonly Ask[]>): Ask[] {
   const seen = new Set<string>()

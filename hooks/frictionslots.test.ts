@@ -11,12 +11,27 @@ import {
   frictionSlotKey,
   mergeFriction,
   ownFriction,
+  stampSession,
 } from './frictionslots'
 
 // Friction per session (Bradley, 2026-10-09): each pod writes only its own friction; every pod
 // reads them all; a day-old slot is folded into the archive.
 
 const f = (at: number, key = 'Bash', detail = 'd'): Friction => ({ kind: 'tool-failure', key, at, detail })
+
+// Two sessions (Bradley, 2026-10-11): friction knows its session; a legacy entry has none.
+test('a slot stamps entries that carry no session with its own, and keeps one already stamped', () => {
+  const mixed = [f(1), { ...f(2), session: 'elsewhere' }]
+  const stamped = stampSession(mixed, 's1')
+  expect(stamped.map(x => x.session)).toEqual(['s1', 'elsewhere'])
+  expect(mixed[0]!.session).toBeUndefined()
+})
+
+test('a stored session survives asFrictionList; a malformed or empty one is dropped to legacy', () => {
+  const out = asFrictionList([{ ...f(1), session: 's9' }, { ...f(2), session: 7 }, { ...f(3), session: '' }, f(4)])
+  expect(out.map(x => x.session)).toEqual(['s9', undefined, undefined, undefined])
+  expect('session' in out[1]!).toBe(false)
+})
 
 test('each session has its own friction slot under the project', () => {
   expect(frictionPrefix('c:/w/p')).toBe('friction:c:/w/p:')

@@ -2,9 +2,11 @@
 // surface's element table (`$.ui.resolve(e)`), never `$` itself: the engine follows
 // `$` only within the hooks module's own file.
 
-import type { Barnacle, Claim, Ticket } from '../types'
+import type { Barnacle, Candidate, Claim, RepairPair, Ticket } from '../types'
 import type { PaneRow } from './asks'
-import { DISMISS_KEY, DISMISS_LABEL, countText, footerRow, footerText, wrapLines } from './notices'
+import { pairCure, pairHead } from './immunity'
+import { DISMISS_KEY, DISMISS_LABEL, NEXT_LABEL, PREV_LABEL, countText, footerRow, footerText, wrapLines } from './notices'
+import { GEM } from './sprites'
 import { INKS } from './body'
 import { BAR_GLYPH } from './ticket'
 import { SAFELIGHT, SPRITE_WIDTH } from './view'
@@ -114,10 +116,45 @@ export function bubbleWidth(room: number, voice: { header: string; text: string 
   return Math.max(BUBBLE_FRAME + 1, Math.min(room, words))
 }
 
-/** What the queue puts in the bubble's footer; `onDismiss` null when the notice showing is not the witness's to dismiss. */
-export type QueueFooter = { n: number; m: number; onDismiss: (() => unknown) | null }
+/**
+ * What the queue puts in the bubble's footer; `onDismiss` null when the notice showing is not the
+ * witness's to dismiss. `onPrev` / `onNext` (1.3.8): the pager, null when there is one page or a
+ * held write waits.
+ */
+export type QueueFooter = {
+  n: number
+  m: number
+  onDismiss: (() => unknown) | null
+  onPrev?: (() => unknown) | null
+  onNext?: (() => unknown) | null
+}
 
 export const NO_FOOTER: QueueFooter = { n: 0, m: 0, onDismiss: null }
+
+const canPage = (f: QueueFooter): boolean => (f.onPrev ?? null) !== null && (f.onNext ?? null) !== null
+
+/**
+ * The count, `<n/m>`. When the queue pages (1.4.1, Bradley 2026-10-11: "use directly the < of
+ * <n/m> as a button"), its `<` and `>` are the buttons themselves: plain one-glyph Buttons with no
+ * hotkey, pressed by a click or by Enter with the band focused, so the count reads as it always
+ * did. With no pager it is the plain text; with nothing waiting beyond one, nothing.
+ */
+function countParts(t: any, footer: QueueFooter, ink: string | undefined): any[] {
+  const { Button, Text } = t
+  const count = countText(footer.n, footer.m)
+  if (count === '') return []
+  const prev = footer.onPrev ?? null
+  const next = footer.onNext ?? null
+  const dim = ink === undefined
+  if (prev === null || next === null) {
+    return [<Text key="witness-count" dimColor={dim} color={ink}>{count}</Text>]
+  }
+  return [
+    <Button key="witness-prev" label={PREV_LABEL} plain onPress={() => prev()} />,
+    <Text key="witness-count" dimColor={dim} color={ink}>{`${footer.n}/${footer.m}`}</Text>,
+    <Button key="witness-next" label={NEXT_LABEL} plain onPress={() => next()} />,
+  ]
+}
 
 function isDismissButton(el: any): boolean {
   if (el?.type !== 'Button') return false
@@ -159,14 +196,15 @@ export function withCount(note: any, count: any): { tree: any; placed: boolean }
 /** `0: Dismiss` (the key bound only while it is drawn) and `<n/m>`, either absent when it does not apply. */
 function footerTree(t: any, footer: QueueFooter, ink: string | undefined): any {
   const { Box, Button, Text } = t
-  const count = countText(footer.n, footer.m)
+  const count = countParts(t, footer, ink)
   const onDismiss = footer.onDismiss
   return (
     <Box flexDirection="row" flexShrink={0} marginLeft={1}>
       {onDismiss !== null && (
         <Button key="witness-dismiss" label={DISMISS_LABEL} hotkey={DISMISS_KEY} plain onPress={() => onDismiss()} />
       )}
-      {count !== '' && <Text dimColor={ink === undefined} color={ink}>{onDismiss !== null ? ` ${count}` : count}</Text>}
+      {onDismiss !== null && count.length > 0 && <Text key="witness-count-gap"> </Text>}
+      {count}
     </Box>
   )
 }
@@ -174,7 +212,7 @@ function footerTree(t: any, footer: QueueFooter, ink: string | undefined): any {
 /** The companion's own words, the footer on the last text row or, where it does not fit, the header row. */
 function voiceTree(t: any, voice: { header: string; text: string }, inner: number, footer: QueueFooter, ink: string | undefined): any {
   const { Box, Text } = t
-  const foot = footerText(footer.onDismiss !== null, footer.n, footer.m)
+  const foot = footerText(footer.onDismiss !== null, footer.n, footer.m, canPage(footer))
   if (foot === '') {
     return (
       <Box flexDirection="column">
@@ -274,7 +312,7 @@ export type InkSpan = { col: number; color: string }
 
 /**
  * The cells on sprite row `row` that take their own ink, left to right: the worn costume in
- * red, the chime in the bells' ink, the barnacles in theirs (1.1), and the eyes in the
+ * red, the chime in the bells' ink, the barnacles in theirs (1.1), the hook and skill gems in green and blue (1.5), and the eyes in the
  * warning colour when the repo is metered, so a push would be held (S165). An eye drawn
  * over by a costume still counts as an eye: the cell table, not the glyph, says where it is.
  */
@@ -283,8 +321,11 @@ export function rowInks(view: View, row: number, meteredEyes: boolean): InkSpan[
     cells.filter(([r]) => r === row).map(([, c]) => ({ col: c, color }))
   return [
     ...at(view.costume, INKS.costume),
+    ...at(view.blush, view.blushLevel === 'amber' ? INKS.blushAmber : INKS.blush),
     ...at(view.bells, INKS.bells),
     ...at(view.barnacles, INKS.barnacles),
+    ...at(view.hookGems, INKS.hookGem),
+    ...at(view.skillGems, INKS.skillGem),
     ...(meteredEyes ? at(view.eyes, 'warning') : []),
   ].sort((a, b) => a.col - b.col)
 }
@@ -293,7 +334,7 @@ export function rowInks(view: View, row: number, meteredEyes: boolean): InkSpan[
  * A sprite row with its inked cells as spans of their own colour; the rest of the row
  * keeps the creature's own colour. A column named twice is inked once, by the first span.
  */
-function inkSpans(t: any, row: string, inks: InkSpan[]): any {
+export function inkSpans(t: any, row: string, inks: InkSpan[]): any {
   if (inks.length === 0) return row
   const { Text } = t
   const chars = Array.from(row)
@@ -327,10 +368,14 @@ export function bandTree(
   ticket: Ticket | null,
   footer: QueueFooter = NO_FOOTER,
   sonar: SonarLine | null = null,
+  noteShows = true,
 ): any {
   const { Box, Text } = t
   const ink = view.safelight ? SAFELIGHT : undefined
-  const parts = splitBeneath(below)
+  const split = splitBeneath(below)
+  // 1.3.8: paged away from the note from beneath, the bubble voices the notice paged to; the
+  // note is not drawn for that page, and comes back when it is paged to again.
+  const parts = noteShows ? split : { ...split, note: null }
   // A guest (1.3) takes a left column from GUEST_MIN_BODY columns, and the band is laid out in
   // the rest; narrower, the guest stands above the band at full width.
   const hasGuest = parts.guest !== null && parts.guest !== undefined
@@ -342,11 +387,19 @@ export function bandTree(
   const speaking = voice !== null || parts.note !== null
   // The room left of the creature and its tail column.
   const room = Math.max(BUBBLE_FRAME + 1, columns - SPRITE_WIDTH[view.size] - 1)
-  const width = bubbleWidth(room, voice, footerText(footer.onDismiss !== null, footer.n, footer.m))
+  const width = bubbleWidth(room, voice, footerText(footer.onDismiss !== null, footer.n, footer.m, canPage(footer)))
   // The note from beneath keeps its own controls; the queue's count goes just after them.
   const count = countText(footer.n, footer.m)
   const note = fitWidth(parts.note, width - BUBBLE_FRAME)
-  const counted = count === '' ? note : withCount(note, <Text dimColor>{` ${count}`}</Text>).tree
+  // The count stands after the note's own controls; paging, its `<` and `>` press (1.4.1).
+  const tally =
+    count === '' ? null : (
+      <Box key="witness-note-tally" flexDirection="row">
+        <Text> </Text>
+        {countParts(t, footer, undefined)}
+      </Box>
+    )
+  const counted = tally === null ? note : withCount(note, tally).tree
   // No width on the root: it holds the engine's own node (`parts.engine`), and an
   // engine node under a Box with a width is refused, blanking the whole band
   // (seen live seven times in S162 whenever no note stood beneath). The root takes
@@ -475,6 +528,11 @@ export function paneTree(
   )
 }
 
+/** One candidate's row: the gem, its kind, its title and why. */
+export function gemLine(c: Candidate): string {
+  return `${GEM} [${c.kind}] ${c.title}${c.why ? ` - ${c.why}` : ''}`
+}
+
 /**
  * The Barnacles pane (1.1): what each barnacle records, a scrub beside each, and one for all.
  * A scrubbed barnacle leaves the shell at once and grows back only from new friction.
@@ -484,12 +542,15 @@ export function barnaclesTree(
   barnacles: Barnacle[],
   onScrub: (key: string) => unknown,
   onScrubAll: () => unknown,
-  pairLines: readonly string[] = [],
+  pairs: readonly RepairPair[] = [],
   onTreat: ((key: string) => unknown) | null = null,
+  jewelsPointer: string | null = null,
 ): any {
   const { Box, Button, Text } = t
-  // The repair pairs (1.2): a failed call and the call that cured it, newest first.
-  const pairs = pairLines.slice(-PANE_PAIRS).reverse()
+  // The repair pairs (1.2): a failed call and the call that cured it, newest first. Since 1.11.2
+  // each is two lines, the target and what failed, then what cured it and the cost, under section
+  // headings, because one flat truncated line each read as "a flat full box of text" (Bradley).
+  const shown = pairs.slice(-PANE_PAIRS).reverse()
   // Treat and wash (1.2, ruled 2026-10-09): treat asks the session for a fix; wash is the old scrub,
   // for a false alarm. The buttons keep the scrub keys a wash has always had.
   return (
@@ -506,35 +567,52 @@ export function barnaclesTree(
           </Box>
         )}
       </Box>
-      {barnacles.length === 0 && <Text dimColor>No barnacles: nothing has recurred.</Text>}
+      <Box marginTop={1}>
+        <Text bold>{`Barnacles (${barnacles.length})`}</Text>
+      </Box>
+      {barnacles.length === 0 && <Text dimColor>{'  None: nothing has recurred.'}</Text>}
       {barnacles.map(b => (
-        <Box key={`b${b.key}`} flexDirection="row">
-          <Box flexGrow={1} flexShrink={1}>
-            <Text wrap="truncate-end">
-              {'* '}
-              {b.text}
-              <Text dimColor>{`  (${b.key})${b.treating !== undefined ? ' in treatment' : ''}`}</Text>
+        <Box key={`b${b.key}`} flexDirection="column" marginTop={1}>
+          <Box marginLeft={2}>
+            <Text>{`* ${b.text}`}</Text>
+          </Box>
+          <Box marginLeft={4}>
+            <Text dimColor wrap="truncate-end">
+              {`${b.key}${b.treating !== undefined ? ' - in treatment' : ''}`}
             </Text>
           </Box>
-          {onTreat !== null && (
-            <Box flexShrink={0} marginLeft={2}>
-              <Button key={`treat-${b.key}`} label="treat" plain onPress={() => onTreat(b.key)} />
+          <Box flexDirection="row" marginLeft={4}>
+            {onTreat !== null && <Button key={`treat-${b.key}`} label="treat" plain onPress={() => onTreat(b.key)} />}
+            <Box marginLeft={onTreat !== null ? 1 : 0}>
+              <Button key={`scrub-${b.key}`} label="wash" plain onPress={() => onScrub(b.key)} />
             </Box>
-          )}
-          <Box flexShrink={0} marginLeft={1}>
-            <Button key={`scrub-${b.key}`} label="wash" plain onPress={() => onScrub(b.key)} />
           </Box>
         </Box>
       ))}
-      {pairs.length > 0 && (
-        <Text key="pairs-heading" dimColor>
-          {`Repair pairs (a failed call and the call that cured it), newest first, ${pairs.length} of ${pairLines.length}:`}
-        </Text>
+      {jewelsPointer !== null && (
+        <Box key="jewels-pointer" marginTop={1}>
+          <Text dimColor wrap="truncate-end">
+            {jewelsPointer}
+          </Text>
+        </Box>
       )}
-      {pairs.map((line, i) => (
-        <Text key={`p${i}`} wrap="truncate-end">
-          {`~ ${line}`}
-        </Text>
+      {shown.length > 0 && (
+        <Box key="pairs-heading" flexDirection="row" marginTop={1}>
+          <Text bold>Repair pairs</Text>
+          <Box flexShrink={1} marginLeft={2}>
+            <Text dimColor wrap="truncate-end">
+              {`a failed call and the call that cured it - newest ${shown.length} of ${pairs.length}`}
+            </Text>
+          </Box>
+        </Box>
+      )}
+      {shown.map((p, i) => (
+        <Box key={`p${i}`} flexDirection="column" marginLeft={2}>
+          <Text wrap="truncate-end">{`~ ${pairHead(p)}`}</Text>
+          <Box marginLeft={2}>
+            <Text dimColor>{pairCure(p)}</Text>
+          </Box>
+        </Box>
       ))}
     </Box>
   )

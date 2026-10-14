@@ -1,4 +1,14 @@
-import type { Body, Mood, Size } from '../types'
+import type { Body, Mood } from '../types'
+
+/**
+ * The one place the `body` option is read. `naut` is the documented value; `phi` is the older
+ * name for the same nautilus and stays accepted. The internal identifier stays `phi` (it keys
+ * the sprite, eye, blush and prop tables), so the rest of the code sees one canonical value.
+ * `phial` is the flask; anything else is the nautilus, as before the rename.
+ */
+export function bodyFromOption(value: unknown): Body {
+  return value === 'phial' ? 'phial' : 'phi'
+}
 
 const PALE: Record<Body, string> = { phi: '#CFC8BC', phial: '#BFD0D3' }
 const DEEP: Record<Body, string> = { phi: '#876D4C', phial: '#B9771F' }
@@ -8,11 +18,19 @@ const DEEP: Record<Body, string> = { phi: '#876D4C', phial: '#B9771F' }
  * metered eye already does (Bradley, 2026-10-09): iniphi teal for the bells, iniphi gold for
  * the barnacles. A held write's safelight still colours the whole creature.
  */
-export const INKS: Readonly<{ bells: string; barnacles: string; costume: string }> = {
+export const INKS: Readonly<{ bells: string; barnacles: string; costume: string; hookGem: string; skillGem: string; blush: string; blushAmber: string }> = {
   bells: '#649090',
   barnacles: '#B59670',
+  // The gem on the shell (1.5, Bradley 2026-10-11): green for a hook candidate, blue for a skill candidate.
+  // Theme keys, never hex, so they follow the person's light or dark theme as the costume's error does.
+  hookGem: 'success',
+  skillGem: 'suggestion',
   // A costume is red (Bradley's live look, 2026-10-09): the theme's error colour, never a hex, as the lab draws every prop.
   costume: 'error',
+  // The blush (1.7, Bradley 2026-10-11) is the same theme key: red is one colour, and the extent says how bad.
+  blush: 'error',
+  // Amber below red (1.10.0, Bradley 2026-10-11): rung 1 and a refusal's afterglow wear the theme's warning colour.
+  blushAmber: 'warning',
 }
 
 function channel(hex: string, i: number): number {
@@ -52,12 +70,6 @@ export function moodFor(m: MoodInput): Mood {
   if (m.pale > 0) return 'doubtful'
   if (m.claims > 0 && m.pale === 0 && m.asksTotal > 0 && m.asksDone === m.asksTotal) return 'proud'
   return 'calm'
-}
-
-export type SizeInput = { moment: boolean; maxRows: number; bodyColumns: number }
-
-export function sizeFor(s: SizeInput): Size {
-  return s.moment && s.maxRows >= 12 && s.bodyColumns >= 70 ? 'full' : 'compact'
 }
 
 export type SpeechInput = {

@@ -30,7 +30,10 @@ export function realFriction(log: Friction[]): Friction[] {
 }
 
 /** The Supabase dialog's own answer when a write is declined, and nothing else (no row data). */
-const CANCEL_STATUS = /^\s*\{\s*"status"\s*:\s*"cancelled"\s*\}\s*$/
+export const CANCEL_STATUS = /^\s*\{\s*"status"\s*:\s*"cancelled"\s*\}\s*$/
+
+/** An error that names a refusal by a guard, a permission rule or a hook; shared with the red warning (refusal.ts). */
+export const GUARD_DENIED = /(denied|refus(?:ed|ing|al)|permission to use|blocked by|not permitted|hook error)/i
 
 function cancelled(c: FrictionInput, at: number): Friction[] {
   // A cancel is a refusal (an error naming it, as the witness hold's is) or the dialog's bare

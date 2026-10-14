@@ -1,6 +1,6 @@
 {
   "name": "witness",
-  "version": "1.3.3",
+  "version": "1.12.1",
   "description": "Keeps a ledger of what you asked for and counts it done only on evidence: claims stay pale until a read-back confirms them, bare SQL UPDATE or DELETE writes are held for your answer, and a print of what was and was not witnessed goes into the session log.",
   "author": {
     "name": "Bradley Higginson"
@@ -10,12 +10,13 @@
     "body": {
       "type": "string",
       "title": "Body",
-      "description": "The companion's body: phi (nautilus) or phial (round-bottom flask).",
+      "description": "The companion's body: naut (nautilus; the older name phi is still accepted) or phial (round-bottom flask).",
       "options": [
+        "naut",
         "phi",
         "phial"
       ],
-      "default": "phi"
+      "default": "naut"
     },
     "watchHold": {
       "type": "boolean",
@@ -38,8 +39,20 @@
     "writerCalls": {
       "type": "string",
       "title": "Writer calls",
-      "description": "Comma-separated SQL functions a SELECT calls to write (schema.name; a trailing * matches any suffix). Default: the author's workspace functions, harmless where that schema does not exist.",
-      "default": "workspace.close_todo, workspace.set_todo_status, workspace.pause_todo, workspace.crosstalk_*, workspace.record_board_attention, workspace.claim_item, workspace.release_claim"
+      "description": "Comma-separated SQL functions a SELECT calls to write (schema.name; a trailing * matches any suffix). Default: none, so a SELECT is a read.",
+      "default": ""
+    },
+    "sqlTools": {
+      "type": "string",
+      "title": "SQL tools",
+      "description": "Comma-separated tool names of the database tools whose queries are held when an UPDATE or DELETE has no RETURNING; * matches any run of characters. Default: mcp__*__execute_sql, any MCP tool whose name ends __execute_sql.",
+      "default": "mcp__*__execute_sql"
+    },
+    "tableSchemas": {
+      "type": "string",
+      "title": "Table schemas",
+      "description": "Comma-separated schemas whose schema.table names in a subagent's report count as targets it named. Default: public.",
+      "default": "public"
     },
     "person": {
       "type": "string",
@@ -86,6 +99,30 @@
         "wait"
       ],
       "default": "auto"
+    },
+    "pointInTimeRecovery": {
+      "type": "boolean",
+      "title": "Database has point-in-time recovery",
+      "description": "Whether a lost-rows SQL statement (DROP, TRUNCATE, an unpinned DELETE or UPDATE) can be got back by a point-in-time restore. On: the blush shows rung 2 (rim and walls). Off, or unknown: rung 3 (the top too), because unknown fails closed.",
+      "default": false
+    },
+    "haemorrhageRows": {
+      "type": "number",
+      "title": "Haemorrhage threshold (rows)",
+      "description": "An UPDATE or DELETE with RETURNING that sends back more rows than it named, and more than this, turns the whole creature red (HAEMORRHAGE). Display only.",
+      "default": 25
+    },
+    "lampTest": {
+      "type": "boolean",
+      "title": "Lamp test at session start",
+      "description": "Show the whole creature red for 1.5 seconds when a session starts, to prove the red channel works.",
+      "default": true
+    },
+    "effectTables": {
+      "type": "string",
+      "title": "Effect tables",
+      "description": "Comma-separated tables whose writes can reach outside the database (a trigger that calls a webhook or build). A write to one is at least rung 2 on the blush; * matches any run of characters. Default: none, so the witness says the triggers are not in effectTables.",
+      "default": ""
     }
   }
 }

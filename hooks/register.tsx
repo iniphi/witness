@@ -7,10 +7,12 @@ import type {
   Barnacle,
   Beat,
   BoardRow,
+  Blush,
   Body,
   Candidate,
   Costume,
   Friction,
+  Haemorrhage,
   Hand,
   Heard,
   Hold,
@@ -56,8 +58,11 @@ import {
   NO_ADAPTERS,
   TICKET_SCRIPT,
   WATCH_SCRIPT,
+  effectTablePattern,
   personRef,
+  isSqlTool,
   readConfig,
+  sqlToolPattern,
   rootFromModuleUrl,
   scriptCandidates,
   sonarOn,
@@ -82,6 +87,7 @@ import {
   unscrub,
 } from './barnacles'
 import type { RecentCall } from './barnacles'
+import { bodyFromOption } from './body'
 import { parseCostume } from './sprites'
 import {
   CONFIRM_TOOL,
@@ -100,20 +106,31 @@ import {
   CANDIDATE_MIN_NEW_CALLS,
   HEADS_UP,
   INSTALLED_GUARDS,
+  MAX_SCRIPTS,
   appendCandidates,
   callDigest,
   candidatesPath,
   candidatesPrompt,
   candidatesSection,
   markFiled,
+  mdHeadings,
   mergeCandidates,
+  mergeCandidatesByKey,
+  retireStrays,
   notesSection,
   noteHeard,
   noteSpoken,
   parseCandidates,
+  scriptSummary,
+  settleCandidatesIn,
   shouldScan,
+  sessionTag,
+  tagFriction,
+  takePrompt,
+  unsettled,
 } from './notes'
-import { asCarrySlot, carryPrefix, carrySlot, carrySlotKey, mergeCarried, takeable } from './carry'
+import type { HeadingNote, ScriptNote } from './notes'
+import { asCarrySlot, carryPrefix, carrySlot, carrySlotKey, mergeCarried, ownLeftovers, takeable } from './carry'
 import {
   archivable,
   asFrictionList,
@@ -123,10 +140,45 @@ import {
   frictionSlotKey,
   mergeFriction,
   ownFriction,
+  stampSession,
 } from './frictionslots'
+import {
+  asRoutineArchive,
+  asRoutineSlot,
+  foldRoutines,
+  noteRoutine,
+  routineArchivable,
+  routineSlot,
+  routinesArchiveKey,
+  routinesPrefix,
+  routinesSlotKey,
+  sharedRoutines,
+} from './routines'
+import type { LiveRoutine, RoutineSlot } from './routines'
+import {
+  FIX,
+  REDS_SLOTS,
+  asRedSlot,
+  closeRed,
+  openRed,
+  redSlot,
+  redsList,
+  redsPrefix,
+  redsSection,
+  redsSlotKey,
+  redsStale,
+} from './redlog'
+import type { OpenRed, RedChannel, RedEvent, RedHow, RedSlot } from './redlog'
 import { podsTree } from './pods'
+import { ABOUT_TITLE, aboutModel, aboutReply, versionOf } from './about'
+import type { AboutModel } from './about'
+import { aboutTree } from './aboutpane'
 import { GUEST_MIN_BODY, GUEST_OWNER_PREFIX, bandTree, barnaclesTree, beneathText, paneTree, splitBeneath } from './render'
-import { addPairs, asPairs, pairCandidates, pairLine, pairsSection } from './immunity'
+import { INSTALL_KEY, applyBudget, asFirstScanAt, configuredHooks, dismissedTitles } from './charter'
+import { calibrateAllText, jewelsList, jewelsPointer, jewelsText, JEWELS_TITLE } from './jewels'
+import { jewelsTree } from './jewelspane'
+import { parseRuling, ruleIn, rulingText } from './ruling'
+import { addPairs, asPairs, pairCandidates, pairsSection } from './immunity'
 import {
   TREATED_DESCRIPTION,
   TREATED_SCHEMA,
@@ -190,6 +242,7 @@ import {
   needsOpenCheck,
   newIds,
   projectKey,
+  rootOf,
   storeKeys,
   tacklePrompt,
   tally,
@@ -202,14 +255,21 @@ import {
 import type { LogTouch } from './support'
 import { TICKET_MS, UNAVAILABLE_TICKET, ticketFromRun } from './ticket'
 import { addUsage, turnRow, usageDir, usageFile, usagePath, usageRow } from './usage'
+import { BLUSH_HEADER, BLUSH_MS, LAMP_MS, blushFor, blushLanded, blushLevel, blushWhy, haemorrhageFrom, haemorrhageNotice } from './blush'
+import { undoOf } from './irreversible'
+import { REFUSAL_MS, REFUSAL_RED_MS, foldRefusal, refusalFrom, refusalLive, refusalNotice } from './refusal'
+import type { Refusal } from './refusal'
 import { EYE_ROW, HOLD_TEXT, buildView } from './view'
-import { dismiss, dismissable, enqueue, remove, settle, showing } from './notices'
+import { dismiss, dismissable, enqueue, remove, settle, showing, step } from './notices'
 import { landedRows, parseRows, parseWatch, watchHeader, watchText } from './watch'
 import { claimLabel, classify, developByAsks, recordAgentTurn, recordCall, recordTurn } from './witness'
 
 const PANE = 'witness-undone'
 const BARNACLES_PANE = 'witness-barnacles'
+const JEWELS_PANE = 'witness-jewels'
 const PODS_PANE = 'witness-pods'
+// /witness (1.3.4). Written here, not imported: the engine reads a matcher's literal only in this file.
+const ABOUT_PANE = 'witness-about'
 // The model's own hand (1.2): it lands in the other pod's prompt box and waits for the person's Enter.
 const HAND_TOOL = 'mcp__witness__hand'
 const HAND_DESCRIPTION =
@@ -223,11 +283,12 @@ const HAND_SCHEMA = {
   required: ['to', 'text'],
 } as const
 const SUBAGENT_HAND = 'witness: a subagent may not hand work to another session; report to the main session instead.'
+// 1.3.5 (loop pass 1, 2026-10-11): the refusal says why a read was refused, and how to read; "use the
+// hand tool" told a session that only wanted to read nothing it could act on.
 const SONAR_FENCE =
-  "witness: the sonar's files (~/.claude/state/witness-sonar) are written by the witness alone, so a hand typed by the person can never be forged. Use the hand tool."
+  "witness: the sonar's files (~/.claude/state/witness-sonar) are written by the witness alone, so a hand typed by the person can never be forged. This command writes there, or runs a word the witness cannot vouch for (an interpreter's code counts as a write). To read the heartbeats, use cat, ls or grep; to hand work to a pod, use the hand tool."
 const FORGED_HAND =
   "witness: a hand envelope is the witness's own. Use the hand tool, or ask the person to type /hand."
-const SQL_TOOL = 'mcp__claude_ai_Supabase__execute_sql'
 const FRAME_MS = 1_500
 const FRAME_CYCLE = [0, 0, 0, 1, 0, 0, 2, 0]
 const HOUSEKEEP_MS = 15_000
@@ -259,6 +320,14 @@ const asksAtom = atom({ plugin: 'witness', key: 'asks' } as const, [] as Ask[])
 const activityAtom = atom({ plugin: 'witness', key: 'activity' } as const, EMPTY_ACTIVITY)
 const noticesAtom = atom({ plugin: 'witness', key: 'notices' } as const, { items: [], seen: 0 } as NoticeQueue)
 const holdAtom = atom({ plugin: 'witness', key: 'hold' } as const, null as Hold | null)
+// A write refused beneath the witness (1.4.0): the band's red and its bubble, until it lapses or the next prompt.
+const refusalAtom = atom({ plugin: 'witness', key: 'refusal' } as const, null as Refusal | null)
+// The safelight blush (1.7): part of the shell red for an irreversible call, by who can undo it.
+const blushAtom = atom({ plugin: 'witness', key: 'blush' } as const, null as Blush | null)
+// Far more rows than the statement named (1.7): the whole creature red, until it lapses or the next prompt.
+const haemorrhageAtom = atom({ plugin: 'witness', key: 'haemorrhage' } as const, null as Haemorrhage | null)
+// The lamp test (1.7): its end, epoch ms; the whole creature red until then, at session start only.
+const lampAtom = atom({ plugin: 'witness', key: 'lamp' } as const, null as number | null)
 const watchAtom = atom({ plugin: 'witness', key: 'watch' } as const, PENDING_WATCH)
 const barnaclesAtom = atom({ plugin: 'witness', key: 'barnacles' } as const, [] as Barnacle[])
 const frameAtom = atom({ plugin: 'witness', key: 'frame' } as const, 0)
@@ -299,6 +368,10 @@ type Session = {
   tick: number
   recent: RecentCall[]
   friction: Friction[]
+  /** This session's own routine heads (1.9): normalised, counted, never an argument. */
+  routines: LiveRoutine[]
+  /** This session's own safelight events (1.10.0): the red log, saved to its own slot. */
+  reds: RedEvent[]
   rowIds: string[]
   /** A candidate pass is in flight; the housekeeping tick must not start a second. */
   scanning: boolean
@@ -318,6 +391,10 @@ type Session = {
   config: Config
   /** The configured writer calls as a pattern; null: none. */
   writers: RegExp | null
+  /** The configured SQL tools as a pattern; null: none. */
+  sqlTools: RegExp | null
+  /** The configured effect tables as a pattern (1.7); null: none. */
+  effectTables: RegExp | null
   /** The estate adapters found at session start; null is off. */
   adapters: Adapters
   /** Where usage files go; null (none written) when the home is unknown. */
@@ -347,6 +424,10 @@ type Session = {
   fenceDir: string | null
   /** The pods as last shown in the Pods pane, by session id: a /hand row number means these. */
   podsShown: string[]
+  /** The manifest's version (1.3.4, for /witness); null when it could not be read. */
+  version: string | null
+  /** A ticket read asked for because none was showing (1.3.6) is in flight. */
+  ticketing: boolean
 }
 
 let s: Session = {
@@ -359,6 +440,8 @@ let s: Session = {
   tick: 0,
   recent: [],
   friction: [],
+  routines: [],
+  reds: [],
   rowIds: [],
   scanning: false,
   sessionId: '',
@@ -369,6 +452,8 @@ let s: Session = {
   headsUp: [],
   config: readConfig({}),
   writers: writerPattern(readConfig({}).writers),
+  sqlTools: sqlToolPattern(readConfig({}).sqlTools),
+  effectTables: null,
   adapters: NO_ADAPTERS,
   usageDir: null,
   opens: [],
@@ -382,6 +467,8 @@ let s: Session = {
   sweeping: false,
   fenceDir: null,
   podsShown: [],
+  version: null,
+  ticketing: false,
 }
 
 function setSession(patch: Partial<Session>): void {
@@ -389,7 +476,7 @@ function setSession(patch: Partial<Session>): void {
 }
 
 function isHeldSql(e: any): boolean {
-  return e?.tool === SQL_TOOL && typeof e.query === 'string' && needsHold(e.query)
+  return isSqlTool(e?.tool, s.sqlTools) && typeof e.query === 'string' && needsHold(e.query)
 }
 
 // ---- reaching out: helper script, session log, side passes, store ----
@@ -440,6 +527,34 @@ function pluginRoot($: any): string {
   } catch {
     return ''
   }
+}
+
+/** The manifest's version, read once at start for /witness (1.3.4); `$.plugin` names no version. */
+async function readVersion($: any, root: string): Promise<string | null> {
+  if (root === '') return null
+  try {
+    return versionOf(await $.fs.read(`${root}/.claude-plugin/plugin.json`))
+  } catch {
+    return null
+  }
+}
+
+/** What /witness says, from the session's state as it stands. */
+async function aboutNow($: any): Promise<AboutModel> {
+  const ticket: Ticket | null = await read($, ticketAtom)
+  const sonar: SonarView = await read($, sonarAtom)
+  return aboutModel({
+    body: s.body,
+    version: s.version,
+    asks: await read($, asksAtom),
+    ledger: await read($, ledgerAtom),
+    activity: await read($, activityAtom),
+    barnacles: await read($, barnaclesAtom),
+    hold: await read($, holdAtom),
+    pods: s.sonarDir === null ? null : sonar.pods.length,
+    costume: await read($, costumeAtom),
+    metered: ticket?.kind === 'ok' && ticket.warnPush,
+  })
 }
 
 /** The adapters' scripts: configured, else found in the mod's own repository; absent, off. */
@@ -685,9 +800,11 @@ async function loadFriction($: any, now: number): Promise<Friction[]> {
   for (const k of all.filter(x => x.startsWith(frictionPrefix(s.key)))) {
     const slot = asFrictionSlot(await $.store.get(k))
     if (slot === null) continue
-    lists.push(slot.entries)
+    // A slot knows whose it is: entries with no session take the slot's (1.9).
+    const entries = stampSession(slot.entries, slot.sessionId)
+    lists.push(entries)
     if (archivable(slot, now, selfId())) {
-      folded.push(slot.entries)
+      folded.push(entries)
       gone.push(k)
     }
   }
@@ -698,7 +815,179 @@ async function loadFriction($: any, now: number): Promise<Friction[]> {
   return mergeFriction(lists)
 }
 
+/** This session's OWN routine heads into its own slot (1.9): never over another session's; no arguments, only heads. */
+async function saveRoutines($: any): Promise<void> {
+  if (s.routines.length === 0) return
+  const slot = routineSlot({ sessionId: selfId(), savedAt: await $.clock.now(), entries: s.routines })
+  await $.store.set(routinesSlotKey(s.key, selfId()), slot)
+}
+
+/** This session's own safelight events into its own slot (1.10.0). Never throws: the log must not cost a call. */
+async function saveReds($: any, now: number): Promise<void> {
+  try {
+    if (s.reds.length === 0 || s.key === '') return
+    await $.store.set(redsSlotKey(s.key, selfId()), redSlot({ sessionId: selfId(), savedAt: now, events: s.reds }))
+  } catch {}
+}
+
+/** A safelight event lit (1.10.0): kept in memory and saved. */
+async function logRed($: any, o: OpenRed): Promise<void> {
+  setSession({ reds: openRed(s.reds, o) })
+  await saveReds($, o.at)
+}
+
+/** An event that never showed on its own: logged and ended in one step (a refusal folded into a live burst). */
+async function logRedEnded($: any, o: OpenRed, how: RedHow): Promise<void> {
+  const next = openRed(s.reds, o)
+  const last = next[next.length - 1]
+  setSession({ reds: last === undefined ? next : closeRed(next, { id: last.id }, how, o.at) })
+  await saveReds($, o.at)
+}
+
+/** Open events of a channel ended (1.10.0). */
+async function endRed($: any, channel: RedChannel, how: RedHow, at: number): Promise<void> {
+  if (!s.reds.some((e) => e.channel === channel && e.endedAt === undefined)) return
+  setSession({ reds: closeRed(s.reds, { channel }, how, at) })
+  await saveReds($, at)
+}
+
+/**
+ * Every session's red slots, this session's included (its live events from memory). Another
+ * session's slot untouched for a week, and any beyond the newest REDS_SLOTS, is deleted (with
+ * `prune`, at a start), so the store stays bounded.
+ */
+async function loadReds($: any, now: number, prune: boolean): Promise<RedSlot[]> {
+  const found: Array<{ key: string; slot: RedSlot }> = []
+  const all: string[] = await $.store.keys().catch(() => [])
+  for (const key of all.filter((x) => x.startsWith(redsPrefix(s.key)))) {
+    const slot = asRedSlot(await $.store.get(key).catch(() => null))
+    if (slot !== null && slot.sessionId !== selfId()) found.push({ key, slot })
+  }
+  found.sort((a, b) => b.slot.savedAt - a.slot.savedAt)
+  const keep = found.filter((f, i) => i < REDS_SLOTS && !redsStale(f.slot, now, selfId()))
+  if (prune) {
+    for (const f of found.filter((x) => !keep.includes(x))) await $.store.delete(f.key).catch(() => undefined)
+  }
+  const mine: RedSlot[] = s.reds.length === 0 ? [] : [redSlot({ sessionId: selfId(), savedAt: now, events: s.reds })]
+  return [...keep.map((f) => f.slot), ...mine]
+}
+
+/**
+ * Every session's routine slots, the archive's and the live ones, one slot per session. With
+ * `fold`, slots untouched for a day are folded into the archive and deleted (at a start), so the
+ * store stays bounded. This session's own slot is left out: its live heads are in `s.routines`.
+ */
+async function loadRoutines($: any, now: number, fold: boolean): Promise<RoutineSlot[]> {
+  const archiveKey = routinesArchiveKey(s.key)
+  const archive = asRoutineArchive(await $.store.get(archiveKey))
+  const live: RoutineSlot[] = []
+  const stale: RoutineSlot[] = []
+  const gone: string[] = []
+  const all: string[] = await $.store.keys().catch(() => [])
+  for (const k of all.filter(x => x.startsWith(routinesPrefix(s.key)))) {
+    const slot = asRoutineSlot(await $.store.get(k))
+    if (slot === null || slot.sessionId === selfId()) continue
+    live.push(slot)
+    if (routineArchivable(slot, now, selfId())) {
+      stale.push(slot)
+      gone.push(k)
+    }
+  }
+  if (fold && gone.length > 0) {
+    await $.store.set(archiveKey, foldRoutines(archive, stale))
+    for (const k of gone) await $.store.delete(k).catch(() => undefined)
+  }
+  return foldRoutines(archive, live)
+}
+
+/**
+ * This session's own leftovers back, as carried (1.3.6, F9): a slot under its own id at a start, or
+ * when the id moves to a resumed one, is this conversation's previous process. No other session
+ * ever takes it (takeable), so without this a crash strands it.
+ */
+async function takeOwn($: any, now: number): Promise<void> {
+  if (s.sessionId === '') return
+  const slot = asCarrySlot(await $.store.get(carrySlotKey(s.key, s.sessionId)).catch(() => null))
+  if (slot === null || slot.asks.length === 0) return
+  const held: Ask[] = await read($, asksAtom)
+  const back = ownLeftovers(slot.asks, held)
+  if (back.length === 0) return
+  const seeded = seedCarried(back, { at: now, ids: newIds(now, back.length, 'k') })
+  await update($, asksAtom, a => [...a, ...seeded])
+}
+
+/**
+ * F9 (2026-10-11, live, after the laptop restarted): a resumed conversation's session.start runs
+ * under a fresh id, and the engine moves to the resumed id afterwards with no session.end. The
+ * witness kept the first id: a phantom pod beat on, and the conversation's own slot was stranded.
+ * The id is now read again on each prompt and sonar sweep; when it has moved, the phantom's beat is
+ * ended and its slot dropped (this process saves under the new id), and the resumed id's own
+ * leftovers come back as carried.
+ */
+async function followId($: any): Promise<void> {
+  const id: unknown = await $.session.id().catch(() => s.sessionId)
+  if (typeof id !== 'string' || id === '' || id === s.sessionId) return
+  const was = s.sessionId
+  const state = s.podState
+  const now = await $.clock.now()
+  if (was !== '') {
+    setSession({ podState: 'ended' })
+    await writeBeat($, now).catch(() => undefined)
+    await $.store.delete(carrySlotKey(s.key, was)).catch(() => undefined)
+  }
+  setSession({ sessionId: id, podState: state, noticedPods: [], podOverlaps: [], podsShown: [] })
+  await takeOwn($, now).catch(() => undefined)
+  await writeBeat($, now).catch(() => undefined)
+  // The ticket read at the start may not be the one the band now reads; read it again now.
+  if (estate()) $.clock.after(0, () => refreshTicket($))
+}
+
+/**
+ * Bradley, 2026-10-11 (a screenshot): at a session's start the band often showed neither the
+ * ticket nor `estate: ?`, so the start's read had landed nowhere the band reads, with the next one
+ * ten minutes off. A prompt that finds no ticket yet asks for one; one read in flight at a time.
+ */
+async function ticketIfMissing($: any): Promise<void> {
+  if (!estate() || s.ticketing) return
+  const ticket: Ticket | null = await read($, ticketAtom)
+  if (ticket !== null) return
+  setSession({ ticketing: true })
+  try {
+    await refreshTicket($)
+  } finally {
+    setSession({ ticketing: false })
+  }
+}
+
+/**
+ * Retires the stray subfolder slots of this repository (1.11.1, "Repo root, retire stray"): a
+ * session started in `<repo>/sub` before 1.11.1 kept its candidates under that folder. Each
+ * `candidates:<root>/<sub>` slot whose own repository root is this one is merged into this
+ * project's slot (unsettled ones `retired`, never overwriting a settled one) and deleted. Friction,
+ * barnacles, carry, repairs and scrubbed stray slots are left alone. Idempotent: a second start
+ * finds no stray slot.
+ */
+async function retireStraySlots($: any, now: number): Promise<void> {
+  const exists = (p: string): Promise<boolean> => $.fs.exists(p).then((v: unknown) => v === true)
+  const prefix = `candidates:${s.key}/`
+  const all: string[] = await $.store.keys().catch(() => [])
+  const strays: Array<{ key: string; list: Candidate[] }> = []
+  for (const k of all.filter(k => k.startsWith(prefix))) {
+    const root = await rootOf(k.slice('candidates:'.length), exists)
+    if (root === null || projectKey(root) !== s.key) continue
+    const v = await $.store.get(k).catch(() => null)
+    strays.push({ key: k, list: Array.isArray(v) ? (v as Candidate[]) : [] })
+  }
+  if (strays.length === 0) return
+  const own = storeKeys(s.key).candidates
+  const stored = await $.store.get(own)
+  const merged = retireStrays(Array.isArray(stored) ? (stored as Candidate[]) : [], strays.map(x => x.list), now)
+  await $.store.set(own, merged)
+  for (const x of strays) await $.store.delete(x.key).catch(() => undefined)
+}
+
 async function loadStored($: any, now: number): Promise<void> {
+  await retireStraySlots($, now).catch(() => undefined)
   const keys = storeKeys(s.key)
   // Only ended sessions' leftovers (1.2): a live session's undone asks stay its own.
   const carried = await takeCarried($, now)
@@ -706,9 +995,19 @@ async function loadStored($: any, now: number): Promise<void> {
     const seeded = seedCarried(carried, { at: now, ids: newIds(now, carried.length, 'k') })
     await update($, asksAtom, a => (a.length === 0 ? seeded : a))
   }
+  // A slot under this session's own id at a start is its previous process (1.3.6, F9).
+  await takeOwn($, now).catch(() => undefined)
   // Every pod's friction, read; this session writes only its own (1.2). Legacy third-edit
   // entries are dropped: a file under build is work, not friction (1.1).
   setSession({ friction: realFriction(await loadFriction($, now)) })
+  // Stale routine slots are folded into the archive now; they are read again at each scan (1.9).
+  await loadRoutines($, now, true).catch(() => undefined)
+  // The red log (1.10.0): this session's own slot back (a resumed id), and old slots pruned.
+  if (s.sessionId !== '') {
+    const own = asRedSlot(await $.store.get(redsSlotKey(s.key, selfId())).catch(() => null))
+    if (own !== null && s.reds.length === 0) setSession({ reds: own.events })
+  }
+  await loadReds($, now, true).catch(() => undefined)
   const stored = await $.store.get(keys.candidates)
   if (Array.isArray(stored)) await update($, candidatesAtom, () => stored as Candidate[])
   const pairs = asPairs(await $.store.get(keys.repairs))
@@ -730,29 +1029,128 @@ async function scanCandidates($: any, now: number, force: boolean): Promise<void
   setSession({ scanning: true })
   try {
     await update($, candidateScanAtom, () => now)
-    const existing: Candidate[] = await read($, candidatesAtom)
+    // Read fresh (1.7.1): another pod's candidates and settles are in the store, not in this atom.
+    const existing: Candidate[] = await freshCandidates($)
     // The installed commands and skills, so a candidate never re-proposes one (a field report).
     const commands: any[] = await $.command.list().catch(() => [])
     const installed = commands
       .filter(c => c?.source === 'user' || c?.source === 'plugin')
       .map(c => ({ name: String(c.name), description: String(c.description ?? '') }))
     const guards = estate() ? INSTALLED_GUARDS : []
-    const prompt = candidatesPrompt({ friction: s.friction, calls: callDigest(observed), existing, installed, guards })
+    const covered = await readCovered($)
+    // The charter (1.11): when this machine first scanned, the dismissed shapes of every project,
+    // and the hooks actually configured.
+    if (asFirstScanAt(await $.store.get(INSTALL_KEY).catch(() => null)) === null) await $.store.set(INSTALL_KEY, now).catch(() => undefined)
+    const dismissed = await readDismissed($)
+    const hooks = await readConfiguredHooks($)
+    // Routines seen in two or more sessions (1.9): this session's live heads beside every other slot's.
+    const others = await loadRoutines($, now, false).catch(() => [] as RoutineSlot[])
+    const mine = routineSlot({ sessionId: selfId(), savedAt: now, entries: s.routines })
+    const prompt = candidatesPrompt({
+      routines: sharedRoutines([...others, mine]),
+      // Session tags (1.9): the pass quotes them, and parseCandidates drops evidence from one session.
+      friction: tagFriction(s.friction, observed, selfId()),
+      calls: callDigest(observed, undefined, sessionTag(selfId())),
+      existing,
+      installed,
+      guards,
+      dismissed,
+      hooks,
+      ...covered,
+    })
     const r = await complete($, 'candidates', prompt)
     if (!r.isAnswered) return
     const fresh = parseCandidates(r.text, existing, now, guards)
     if (fresh.length === 0) return
-    const next = mergeCandidates(existing, fresh)
-    await update($, candidatesAtom, () => next)
-    await $.store.set(storeKeys(s.key).candidates, next)
+    await persistCandidates($, mergeCandidates(existing, fresh))
   } finally {
     setSession({ scanning: false })
   }
 }
 
+/** The titles of jewels dismissed in any project's candidates slot (1.11): shown to the pass, never displayed. */
+async function readDismissed($: any): Promise<string[]> {
+  const all: string[] = await $.store.keys().catch(() => [])
+  const lists: Candidate[][] = []
+  for (const k of all.filter(k => k.startsWith('candidates:'))) {
+    const v = await $.store.get(k).catch(() => null)
+    if (Array.isArray(v)) lists.push(v as Candidate[])
+  }
+  return dismissedTitles(lists)
+}
+
+/** The hooks configured in the user, project and local settings files (1.11), as `event matcher: script` lines. */
+async function readConfiguredHooks($: any): Promise<string[]> {
+  const root = s.cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  const paths = [
+    ...(s.home === null ? [] : [`${s.home.replace(/\\/g, '/').replace(/\/+$/, '')}/.claude/settings.json`]),
+    `${root}/.claude/settings.json`,
+    `${root}/.claude/settings.local.json`,
+  ]
+  const texts: string[] = []
+  for (const path of paths) {
+    try {
+      if ((await $.fs.exists(path).catch(() => false)) !== true) continue
+      const text: string | null = await $.fs.read(path).catch(() => null)
+      if (typeof text === 'string') texts.push(text)
+    } catch {
+      // absent or unreadable: omitted
+    }
+  }
+  return configuredHooks(texts)
+}
+
+/** This project's jewels split by the first-week budget (1.11): what shows, and what is queued. */
+async function budgetedJewels($: any, own: readonly Candidate[]): Promise<{ shown: Candidate[]; queued: Candidate[] }> {
+  const first = asFirstScanAt(await $.store.get(INSTALL_KEY).catch(() => null))
+  return applyBudget(own, first, await $.clock.now())
+}
+
+/** Script extensions whose first comment line is worth reading. */
+const SCRIPT_EXT = /\.(py|sh|bash|ps1|js|mjs|cjs|ts|bat|cmd)$/i
+
+/**
+ * What already exists, for the candidate pass's covered check (1.8): the session repo's scripts/
+ * (names, with a first docstring or comment line) and the headings of the CLAUDE.md files Claude
+ * Code loads. Read through the engine's fs with every failure tolerated: absent is omitted.
+ */
+async function readCovered($: any): Promise<{ scripts: ScriptNote[]; headings: HeadingNote[] }> {
+  const root = s.cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  const scripts: ScriptNote[] = []
+  try {
+    const entries: any[] = await $.fs.list(`${root}/scripts`).catch(() => [])
+    const names = entries
+      .filter(e => e?.kind === 'file' && SCRIPT_EXT.test(String(e.name)))
+      .map(e => String(e.name))
+      .sort()
+      .slice(0, MAX_SCRIPTS)
+    for (const name of names) {
+      const text: string | null = await $.fs.read(`${root}/scripts/${name}`).catch(() => null)
+      scripts.push({ name, summary: typeof text === 'string' ? scriptSummary(text) : '' })
+    }
+  } catch {
+    // the covered check is best-effort
+  }
+  const headings: HeadingNote[] = []
+  const files: Array<[string, string]> = [['CLAUDE.md', `${root}/CLAUDE.md`]]
+  if (s.home !== null) files.push(['~/.claude/CLAUDE.md', `${s.home.replace(/\\/g, '/').replace(/\/+$/, '')}/.claude/CLAUDE.md`])
+  for (const [label, path] of files) {
+    try {
+      if ((await $.fs.exists(path).catch(() => false)) !== true) continue
+      const text: string | null = await $.fs.read(path).catch(() => null)
+      const found = typeof text === 'string' ? mdHeadings(text) : []
+      if (found.length > 0) headings.push({ file: label, headings: found })
+    } catch {
+      // absent or unreadable: omitted
+    }
+  }
+  return { scripts, headings }
+}
+
 /** Appends this watch's unfiled candidates to the running file, then marks them filed. */
 async function fileCandidates($: any, now: number, source: string): Promise<void> {
-  const candidates: Candidate[] = await read($, candidatesAtom)
+  // Read fresh (1.7.1): what another pod filed is not filed twice, and its settles are kept.
+  const candidates: Candidate[] = await freshCandidates($)
   const unfiled = candidates.filter(c => !c.filed)
   if (unfiled.length === 0) return
   const root = s.cwd.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -760,9 +1158,23 @@ async function fileCandidates($: any, now: number, source: string): Promise<void
   const before: string = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
   const date = new Date(now).toISOString().slice(0, 10)
   await $.fs.write(path, appendCandidates(before, candidates, { date, source }))
-  const next = markFiled(candidates, unfiled.map(c => c.key))
-  await update($, candidatesAtom, () => next)
-  await $.store.set(storeKeys(s.key).candidates, next)
+  await persistCandidates($, markFiled(candidates, unfiled.map(c => c.key)))
+}
+
+/**
+ * Writes this session's candidates to the project's one store slot (1.7.1, Bradley 2026-10-11:
+ * "when a skill or hook is taken it reappears in the jewel section so i have to redismiss it").
+ * Each live session holds the list it loaded at its start; writing that copy whole put back jewels
+ * another session had settled. So the slot is read fresh and merged by key: a settled or filed
+ * jewel never reverts (`mergeCandidatesByKey`). The atom follows what was written.
+ */
+async function persistCandidates($: any, mine: readonly Candidate[]): Promise<Candidate[]> {
+  const key = storeKeys(s.key).candidates
+  const stored = await $.store.get(key)
+  const merged = mergeCandidatesByKey(Array.isArray(stored) ? (stored as Candidate[]) : [], mine)
+  await $.store.set(key, merged)
+  await update($, candidatesAtom, () => merged)
+  return merged
 }
 
 /** Between sessions: keep the friction that recurs, as barnacles. */
@@ -821,6 +1233,88 @@ async function treatBarnacle($: any, key: string): Promise<string> {
   await update($, barnaclesAtom, () => next)
   await $.store.set(storeKeys(s.key).barnacles, next)
   return 'The treatment is in your prompt box: send it, and the session proposes a fix for you to accept or reject.'
+}
+
+/**
+ * Settles candidates (1.5, the gem): `keys` null settles every one still waiting. Read fresh from
+ * the store and merged by key before the write, so a second live session's candidates are not
+ * lost, as keepPairs does for repairs; the atom follows the store.
+ */
+async function settleCandidates($: any, keys: readonly string[] | null, how: 'taken' | 'dismissed', storeKey: string | null = null): Promise<void> {
+  const now = await $.clock.now()
+  const own = storeKeys(s.key).candidates
+  const target = storeKey ?? own
+  const stored = await $.store.get(target)
+  const fresh: Candidate[] = Array.isArray(stored) ? (stored as Candidate[]) : target === own ? await read($, candidatesAtom) : []
+  const next = settleCandidatesIn(fresh, keys ?? unsettled(fresh).map(c => c.key), how, now)
+  await $.store.set(target, next)
+  // The shell's gems are this project's only: another project's key never touches the atom.
+  if (target === own) await update($, candidatesAtom, () => next)
+}
+
+/**
+ * Rules taken jewels built or dismissed (1.12): read fresh from the store and merged by key before
+ * the write, as settleCandidates does, so a second live session's candidates are not lost. Only the
+ * pure ruleIn decides what changes; the lines it returns are the answer.
+ */
+async function ruleCandidates($: any, refs: readonly string[], how: 'built' | 'dismissed'): Promise<string> {
+  const now = await $.clock.now()
+  const own = storeKeys(s.key).candidates
+  const stored = await $.store.get(own)
+  const fresh: Candidate[] = Array.isArray(stored) ? (stored as Candidate[]) : await read($, candidatesAtom)
+  const { next, lines } = ruleIn(fresh, refs, how, now)
+  await $.store.set(own, next)
+  await update($, candidatesAtom, () => next)
+  return lines.join('\n')
+}
+
+/**
+ * This project's candidates read fresh (1.6): other pods add to the same store key while this
+ * session runs, so the store wins by key and the atom's own (not yet stored) ones are kept.
+ */
+async function freshCandidates($: any, remember = false): Promise<Candidate[]> {
+  const stored = await $.store.get(storeKeys(s.key).candidates)
+  const held: Candidate[] = await read($, candidatesAtom)
+  if (!Array.isArray(stored)) return held
+  const fromStore = stored as Candidate[]
+  const seen = new Set(fromStore.map(c => c.key))
+  const merged = [...fromStore, ...held.filter(c => !seen.has(c.key))]
+  if (remember) await update($, candidatesAtom, () => merged)
+  return merged
+}
+
+/**
+ * Take (1.5): the candidate goes into the prompt box for the session to propose how to build it,
+ * as treat does for a barnacle, never over a draft. Settled `taken` only once the box took it.
+ * `storeKey` names another project's key (1.6); it is settled there, never in this one.
+ */
+async function takeCandidate($: any, key: string, storeKey: string | null = null): Promise<string> {
+  const own = storeKeys(s.key).candidates
+  const target = storeKey ?? own
+  const stored = await $.store.get(target)
+  const list: Candidate[] = Array.isArray(stored) ? (stored as Candidate[]) : target === own ? await read($, candidatesAtom) : []
+  const candidate = list.find(c => c.key === key)
+  if (candidate === undefined) return 'That candidate is no longer on the shell.'
+  const box: any = await $.prompt.read().catch(() => ({ text: '' }))
+  if (typeof box?.text === 'string' && box.text.trim() !== '') return 'Your prompt box holds a draft; clear it, then press take again.'
+  const filled: any = await $.prompt.fill({ text: takePrompt(candidate), mode: 'replace' }).catch(() => null)
+  if (filled === null || filled?.isFilled === false) return 'The prompt box would not take the candidate.'
+  await settleCandidates($, [key], 'taken', target)
+  return `The ${candidate.kind} candidate is in your prompt box: send it, and the session proposes how to build it.`
+}
+
+/**
+ * Calibrate all (1.8): every listed jewel goes into the prompt box as one batch ask, never over a
+ * draft; each is settled `taken` through settleCandidates only once the box took it.
+ */
+async function calibrateAll($: any, items: readonly Candidate[]): Promise<string> {
+  if (items.length === 0) return 'Nothing is listed to calibrate.'
+  const box: any = await $.prompt.read().catch(() => ({ text: '' }))
+  if (typeof box?.text === 'string' && box.text.trim() !== '') return 'Your prompt box holds a draft; clear it, then press calibrate all again.'
+  const filled: any = await $.prompt.fill({ text: calibrateAllText(items), mode: 'replace' }).catch(() => null)
+  if (filled === null || filled?.isFilled === false) return 'The prompt box would not take the jewels.'
+  await settleCandidates($, items.map(c => c.key), 'taken')
+  return `${items.length} jewel${items.length === 1 ? '' : 's'} are in your prompt box as one calibration ask: send it.`
 }
 
 /**
@@ -886,14 +1380,18 @@ async function recordRepair(
   const context = typeof usage?.context?.tokens === 'number' ? usage.context.tokens : undefined
   const aged = age(s.opens, c.at)
   if (c.isError) {
-    setSession({ opens: noteFailure(aged, { tool: c.tool, input: c.input, resultText: c.resultText, at: c.at, writers: s.writers, context }) })
+    setSession({ opens: noteFailure(aged, { tool: c.tool, input: c.input, resultText: c.resultText, at: c.at, writers: s.writers, sqlTools: s.sqlTools, context }) })
     return
   }
-  const r = cure(aged, { tool: c.tool, input: c.input, at: c.at, writers: s.writers })
+  const r = cure(aged, { tool: c.tool, input: c.input, at: c.at, writers: s.writers, sqlTools: s.sqlTools })
   setSession({ opens: r.opens })
   if (r.pairs.length === 0) return
+  // Each pair knows its turn (1.8): immune memory counts turns, not pairs.
+  // Qualified by the session: turn ids restart in each, and memory spans sessions.
+  const turn = `${selfId()}:${String(await read($, turnAtom))}`
+  const turned = r.pairs.map(p => ({ ...p, turn }))
   // One store write at a time: two parallel cures would otherwise each overwrite the other's pair.
-  const kept = pairWrites.then(() => keepPairs($, r.pairs, c.at))
+  const kept = pairWrites.then(() => keepPairs($, turned, c.at))
   pairWrites = kept.catch(() => undefined)
   await kept
 }
@@ -911,17 +1409,21 @@ async function keepPairs($: any, fresh: readonly RepairPair[], at: number): Prom
   const next = addPairs(asPairs(await $.store.get(keys.repairs)), fresh)
   await $.store.set(keys.repairs, next)
   await update($, repairsAtom, () => next)
-  const existing: Candidate[] = await read($, candidatesAtom)
+  const existing: Candidate[] = await freshCandidates($)
   const minted = pairCandidates(next, existing, at)
   if (minted.length === 0) return
-  const merged = mergeCandidates(existing, minted)
-  await update($, candidatesAtom, () => merged)
-  await $.store.set(keys.candidates, merged)
+  await persistCandidates($, mergeCandidates(existing, minted))
 }
 
 /** End of watch: the print into the open session log, the undone carried forward. */
 /** What a print came to: the line said to Bradley, the print itself, and where it was written. */
 type Printed = { summary: string; print: string; path: string | null }
+
+/** The print's Safelight section (1.10.0): this session's red events, with a blank line before; empty when none. */
+function safelightExtra(): string[] {
+  const section = redsSection(s.reds.filter((e) => e.at >= s.startedAt))
+  return section.length === 0 ? [] : ['', ...section]
+}
 
 async function writePrint($: any): Promise<Printed> {
   const now = await $.clock.now()
@@ -932,7 +1434,7 @@ async function writePrint($: any): Promise<Printed> {
   const log = await openLog($)
   if (log === null) {
     const summary = `No open session log from this session; the undone were kept for the next watch (${counted}).`
-    return { summary, print: printSection(asks, ledger), path: null }
+    return { summary, print: printSection(asks, ledger, safelightExtra()), path: null }
   }
   await scanCandidates($, now, true).catch(() => undefined)
   const spoken: Spoken[] = await read($, spokenAtom)
@@ -944,6 +1446,7 @@ async function writePrint($: any): Promise<Printed> {
     ...pairsSection(repairs, s.startedAt),
     '',
     ...candidatesSection(candidates, s.startedAt),
+    ...safelightExtra(),
   ]
   const print = printSection(asks, ledger, extra)
   await $.fs.write(log.path, withPrint(log.text, print))
@@ -1116,6 +1619,8 @@ async function sonarTick($: any): Promise<void> {
   if (s.sonarDir === null || s.sweeping) return
   setSession({ sweeping: true })
   try {
+    // A resume moves the id without an event (F9): the sweep is where an idle pod notices.
+    await followId($).catch(() => undefined)
     const now = await $.clock.now()
     await writeBeat($, now)
     const pods = livePods(await readBeats($, now), { now, self: s.sessionId })
@@ -1257,7 +1762,7 @@ function fencedWrite(e: any): boolean {
   if (e.tool !== 'Bash' && e.tool !== 'PowerShell' && e.tool !== 'Monitor') return true
   const tool = e.tool === 'Monitor' ? 'Bash' : e.tool
   const input = { command: String(e.command ?? '') }
-  const { writes } = classify({ tool, input, resultText: '', isError: false, isReadOnly: false, writers: s.writers })
+  const { writes } = classify({ tool, input, resultText: '', isError: false, isReadOnly: false, writers: s.writers, sqlTools: s.sqlTools })
   // Only a write INTO the folder, or a command word nobody can vouch for: `2>/dev/null` on a read
   // is not one (the Ammonite pod's field report, S170: two read-only commands were refused).
   return writes.some(w => w.kind === 'other' || w.target.toLowerCase().includes('witness-sonar'))
@@ -1313,6 +1818,7 @@ async function holdWrite($: any, e: any): Promise<{ pass: boolean; e: any; reaso
   const heldId = `h${now}`
   const held = { kind: 'held' as const, header: 'HELD', text: HOLD_TEXT, full: true, until: null }
   await update($, noticesAtom, q => enqueue(q, held, heldId, now))
+  await logRed($, { channel: 'hold', level: 'red', why: HOLD_TEXT, fix: FIX.hold, at: now })
   let answer = CANCEL
   try {
     const question =
@@ -1325,10 +1831,11 @@ async function holdWrite($: any, e: any): Promise<{ pass: boolean; e: any; reaso
   } finally {
     await update($, holdAtom, () => null)
     await update($, noticesAtom, q => remove(q, heldId))
+    await endRed($, 'hold', 'answered', await $.clock.now())
   }
   // Every answer but a cancel is noted here; a cancel is noted by the deny's classification.
   const noted = (kind: Friction['kind']): void => {
-    const f: Friction = { kind, key: SQL_TOOL, at: now, detail: askText(e.query).slice(0, 160) }
+    const f: Friction = { kind, key: String(e.tool), at: now, detail: askText(e.query).slice(0, 160), session: selfId() }
     setSession({ friction: noteFriction(s.friction, f) })
   }
   if (answer === ADD && fixed !== null) {
@@ -1353,7 +1860,7 @@ async function recordRun($: any, e: any, ran: any): Promise<void> {
   const { tool, tool_use_id: _id, agentId, ...input } = e
   const resultText = ran.deny !== undefined ? String(ran.deny) : String(ran.text ?? '')
   const isError = ran.deny !== undefined || ran.isError === true
-  const classified = classify({ tool, input, resultText, isError, isReadOnly: ran.isReadOnly === true, writers: s.writers })
+  const classified = classify({ tool, input, resultText, isError, isReadOnly: ran.isReadOnly === true, writers: s.writers, sqlTools: s.sqlTools })
   const ids = newIds(now, classified.writes.length, 'w')
   const turnId = await read($, turnAtom)
   const subagent = agentId !== undefined
@@ -1370,12 +1877,16 @@ async function recordRun($: any, e: any, ran: any): Promise<void> {
     isError,
     agent: subagent,
     at: now,
+    turn: String(turnId),
   }
   await update($, observedAtom, log => observe(log, seen))
   // Friction is the main session's own: a sub-agent's failures, interleaved across agents,
   // are neither its friction nor part of its "in a row" (a field report).
   if (!subagent) {
-    const found = frictionFrom({ tool, input, resultText, isError, recent: s.recent, at: now })
+    // The routine this call belongs to, as a normalised head (1.9): never its arguments.
+    setSession({ routines: noteRoutine(s.routines, seen) })
+    // Each entry knows its session (1.9, "Two sessions"): a jewel needs its friction in two.
+    const found = frictionFrom({ tool, input, resultText, isError, recent: s.recent, at: now }).map(f => ({ ...f, session: selfId() }))
     setSession({
       friction: found.reduce(noteFriction, s.friction),
       recent: [...s.recent, { tool, input, isError, at: now }].slice(-RECENT_CAP),
@@ -1390,6 +1901,168 @@ async function recordRun($: any, e: any, ran: any): Promise<void> {
     const logged = logTouch(tool, input, s.cwd, s.config.sessionsDir)
     if (logged !== null) await bindTouch($, logged, now)
   }
+}
+
+/**
+ * A write another guard refused (1.4.0): the result `next` returned, not the witness's own deny.
+ * Red and a bubble naming the layer. Display only; the write stays refused. Never throws.
+ */
+async function noteRefusal($: any, e: any, ran: any): Promise<boolean> {
+  try {
+    if (!isSqlTool(e.tool, s.sqlTools) || typeof e.query !== 'string') return false
+    const denied = ran?.deny !== undefined
+    const resultText = denied ? String(ran.deny) : String(ran?.text ?? '')
+    const now = await $.clock.now()
+    const id = `r${now}`
+    const refusal = refusalFrom(
+      { tool: e.tool, query: e.query, resultText, isError: denied || ran?.isError === true, denied, agent: e.agentId !== undefined, writers: s.writers },
+      now,
+      id,
+    )
+    if (refusal === null) return false
+    const old: Refusal | null = await read($, refusalAtom)
+    // Once per burst (1.10.0): a refusal while one is live does not flash the whole creature again.
+    const burst = old !== null && refusalLive(old, now)
+    const folded = foldRefusal(old, refusal, now)
+    const note = refusalNotice(folded, e.agentId !== undefined)
+    await update($, noticesAtom, q => enqueue(old === null ? q : remove(q, old.noticeId), { kind: 'own', header: note.header, text: note.text, full: true, until: folded.until }, id, now))
+    await update($, spokenAtom, log => noteSpoken(log, { header: note.header, text: note.text, at: now }))
+    await update($, refusalAtom, () => folded)
+    if (burst) {
+      // Folded into the live one: logged and ended at once, so the log still counts every refusal.
+      await logRedEnded($, { channel: 'refusal', level: 'amber', why: note.text, fix: FIX.refusal, at: now }, 'burst')
+    } else {
+      await logRed($, { channel: 'refusal', level: 'red', why: note.text, fix: FIX.refusal, at: now })
+      // The red gives way to the amber rim after REFUSAL_RED_MS; nudge a redraw then.
+      const start = folded.at
+      $.clock.after(REFUSAL_RED_MS, () => nudgeRefusal($, start))
+    }
+    $.clock.after(REFUSAL_MS, () => lapseRefusal($))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The whole-creature red gives way to the amber rim: touch the refusal so the band redraws (1.10.0). */
+async function nudgeRefusal($: any, start: number): Promise<void> {
+  try {
+    await update($, refusalAtom, (r: Refusal | null) => (r !== null && r.at === start ? { ...r } : r))
+  } catch {}
+}
+
+/** The refusal's window is over (nothing extended it): its log event lapsed (1.10.0). */
+async function lapseRefusal($: any): Promise<void> {
+  try {
+    const now = await $.clock.now()
+    const r: Refusal | null = await read($, refusalAtom)
+    if (r !== null && r.until > now) return
+    await endRed($, 'refusal', 'lapsed', now)
+  } catch {}
+}
+
+/**
+ * The safelight blush (1.7): lights as an irreversible call goes out, with the bubble naming who
+ * can undo it. The main session's calls only. Returns the blush's id, or null when none lit.
+ * Display only; never throws.
+ */
+async function lightBlush($: any, e: any): Promise<string | null> {
+  try {
+    if (e.agentId !== undefined) return null
+    const { tool: _t, tool_use_id: _id, agentId: _a, ...input } = e
+    const ticket: Ticket | null = await read($, ticketAtom)
+    const undo = undoOf({
+      tool: e.tool,
+      input,
+      push: ticket?.kind === 'ok' ? ticket.push : null,
+      pitr: s.config.pointInTimeRecovery,
+      sqlTools: s.sqlTools,
+      effectTables: s.effectTables,
+    })
+    if (undo === null) return null
+    const now = await $.clock.now()
+    const blush = blushFor(undo, now, `b${now}`)
+    const old = await read($, blushAtom)
+    await update($, noticesAtom, q => enqueue(old === null ? q : remove(q, old.noticeId), { kind: 'own', header: BLUSH_HEADER, text: blush.text, full: true, until: blush.until }, blush.noticeId, now))
+    await update($, blushAtom, () => blush)
+    await endRed($, 'blush', 'lapsed', now)
+    await logRed($, { channel: 'blush', level: blushLevel(undo.rung), rung: undo.rung, why: blushWhy(undo), fix: undo.undo, at: now })
+    return blush.noticeId
+  } catch {
+    return null
+  }
+}
+
+/** The blush once its call has come back: gone if the call was refused or failed, else held for the floor. */
+async function landBlush($: any, id: string | null, failed: boolean): Promise<void> {
+  try {
+    const b: Blush | null = await read($, blushAtom)
+    if (id === null || b === null || b.noticeId !== id) return
+    if (failed) {
+      await update($, noticesAtom, q => remove(q, id))
+      await update($, blushAtom, () => null)
+      await endRed($, 'blush', 'failed', await $.clock.now())
+      return
+    }
+    const now = await $.clock.now()
+    const landed = blushLanded(b, now)
+    await update($, noticesAtom, q => enqueue(q, { kind: 'own', header: BLUSH_HEADER, text: landed.text, full: true, until: landed.until }, id, now))
+    await update($, blushAtom, () => landed)
+    $.clock.after(BLUSH_MS, () => lapseBlush($, id))
+  } catch {}
+}
+
+async function lapseBlush($: any, id: string): Promise<void> {
+  const b: Blush | null = await read($, blushAtom)
+  const now = await $.clock.now()
+  if (b === null || b.noticeId !== id || b.until > now) return
+  await update($, blushAtom, () => null)
+  await update($, noticesAtom, q => remove(q, id))
+  await endRed($, 'blush', 'lapsed', now)
+}
+
+async function lapseLamp($: any): Promise<void> {
+  await update($, lampAtom, () => null)
+  await endRed($, 'lamp', 'lapsed', await $.clock.now())
+}
+
+/**
+ * Many more rows than the statement named (1.7): the whole creature red and HAEMORRHAGE, as a
+ * refusal shows. Display only; the write has happened. The main session's calls only. Never throws.
+ */
+async function noteHaemorrhage($: any, e: any, ran: any): Promise<void> {
+  try {
+    if (e.agentId !== undefined || !isSqlTool(e.tool, s.sqlTools) || typeof e.query !== 'string') return
+    if (ran?.deny !== undefined || ran?.isError === true) return
+    const now = await $.clock.now()
+    const found = haemorrhageFrom({ query: e.query, resultText: String(ran?.text ?? ''), threshold: s.config.haemorrhageRows }, now, `h${now}`)
+    if (found === null) return
+    const old: Haemorrhage | null = await read($, haemorrhageAtom)
+    const blush: Blush | null = await read($, blushAtom)
+    const note = haemorrhageNotice(found)
+    // The full red takes over from the blush.
+    await update($, noticesAtom, q => {
+      const gone = [old?.noticeId, blush?.noticeId].reduce<NoticeQueue>((acc, id) => (id === undefined ? acc : remove(acc, id)), q)
+      return enqueue(gone, { kind: 'own', header: note.header, text: note.text, full: true, until: found.until }, found.noticeId, now)
+    })
+    await update($, spokenAtom, log => noteSpoken(log, { header: note.header, text: note.text, at: now }))
+    await update($, blushAtom, () => null)
+    await update($, haemorrhageAtom, () => found)
+    await endRed($, 'blush', 'lapsed', now)
+    await endRed($, 'haemorrhage', 'lapsed', now)
+    await logRed($, { channel: 'haemorrhage', level: 'red', why: note.text, fix: FIX.haemorrhage, at: now })
+    $.clock.after(REFUSAL_MS, () => lapseHaemorrhage($))
+  } catch {}
+}
+
+/** The haemorrhage's window is over: its log event lapsed (1.10.0). */
+async function lapseHaemorrhage($: any): Promise<void> {
+  try {
+    const now = await $.clock.now()
+    const h: Haemorrhage | null = await read($, haemorrhageAtom)
+    if (h !== null && h.until > now) return
+    await endRed($, 'haemorrhage', 'lapsed', now)
+  } catch {}
 }
 
 /** Asks called done on this claim and still unproved: put to Claude on the next prompt, once each. */
@@ -1408,6 +2081,7 @@ async function afterTurn($: any, now: number, claimId: string | null, answer: st
   }
   await saveCarry($)
   await saveFriction($)
+  await saveRoutines($)
 }
 
 /**
@@ -1419,7 +2093,7 @@ async function agentReport($: any, agentId: string, answer: string, now: number)
   const cid = newIds(now, 1, 'c')[0] ?? `c${now}`
   let minted: string | null = null
   await update($, ledgerAtom, l => {
-    const r = recordAgentTurn(l, { agentId, at: now, answer, id: cid })
+    const r = recordAgentTurn(l, { agentId, at: now, answer, id: cid, schemas: s.config.tableSchemas })
     minted = r.claim?.id ?? null
     return r.ledger
   })
@@ -1451,9 +2125,14 @@ function askableText(text: string): string {
 export const register: Register = (on, options) => {
   const opts = (options ?? {}) as { body?: string; watchHold?: boolean }
   const config = readConfig(options)
-  setSession({ config, writers: writerPattern(config.writers) })
+  setSession({
+    config,
+    writers: writerPattern(config.writers),
+    sqlTools: sqlToolPattern(config.sqlTools),
+    effectTables: effectTablePattern(config.effectTables),
+  })
   // Off unless turned on (S164, ruled with the user-scope install): no project is held at every start.
-  setSession({ body: opts.body === 'phial' ? 'phial' : 'phi', watchHold: opts.watchHold === true })
+  setSession({ body: bodyFromOption(opts.body), watchHold: opts.watchHold === true })
 
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
@@ -1461,13 +2140,14 @@ export const register: Register = (on, options) => {
     const sessionId: unknown = await $.session.id().catch(() => '')
     setSession({
       cwd: e.cwd,
-      key: projectKey(e.cwd),
+      key: projectKey((await rootOf(e.cwd, p => $.fs.exists(p).then((v: unknown) => v === true))) ?? e.cwd),
       interactive: e.isInteractive,
       startedAt: typeof usage?.startedAt === 'number' ? usage.startedAt : now,
       sessionId: typeof sessionId === 'string' ? sessionId : '',
     })
     // The estate adapters (1.0): each off when its script is absent.
     const root = pluginRoot($)
+    setSession({ version: await readVersion($, root) })
     const adapters = await findAdapters($, e.cwd, root)
     const home = await homeDir($)
     // The fence is armed in every session, before the interactive check (1.2, the verifier's blocker);
@@ -1497,12 +2177,18 @@ export const register: Register = (on, options) => {
       name: 'tackle',
       description: `Witness: put ${estate() ? `an ${ESTATE_TACKLE_SKILL}` : 'a'} run over the undone asks in the prompt box, to read and send`,
     })
-    // The costume seam (1.1, Bradley 2026-10-09): a later organ dresses Phi through $.command.run.
-    await $.command.register({ name: 'wear', description: 'Witness: dress Phi - razor, compass, horns, or none' })
+    // The costume seam (1.1, Bradley 2026-10-09): a later organ dresses Naut through $.command.run.
+    await $.command.register({ name: 'wear', description: 'Witness: dress Naut - razor, compass, horns, or none' })
+    // 1.3.4: the companion says what it is, what it is watching now, and what 1.3 brought.
+    await $.command.register({ name: 'witness', description: 'Witness: who Naut is, what it is watching now, and what is new in 1.3' })
     await $.command.register({
       name: 'barnacles',
       description: 'Witness: what the barnacles on the shell record, and scrub them off',
     })
+    // 1.6: the proposed hooks and skills in their own pane.
+    await $.command.register({ name: 'jewels', description: 'Witness: the hooks and skills the witness proposes, to take or dismiss; /jewels taken lists, /jewels built N or dismissed N rules' })
+    // 1.10.0: the red log, this project's safelight events across sessions.
+    await $.command.register({ name: 'reds', description: 'Witness: the safelight events - when, why, the fix, how each ended' })
     // A refused registration costs the confirm tool, never the rest of the start.
     const person = s.config.person
     await $.tool
@@ -1512,6 +2198,12 @@ export const register: Register = (on, options) => {
     await $.tool.register({ name: 'treated', description: TREATED_DESCRIPTION, inputSchema: TREATED_SCHEMA }).catch(() => undefined)
     await loadStored($, now)
     if (!e.isInteractive) return next(e)
+    // The lamp test (1.7): the whole creature red for a moment, no bubble, to prove the red channel.
+    if (s.config.lampTest) {
+      await update($, lampAtom, () => now + LAMP_MS)
+      await logRed($, { channel: 'lamp', level: 'red', why: 'lamp test at session start: the whole creature red for a moment', fix: FIX.lamp, at: now })
+      $.clock.after(LAMP_MS, () => lapseLamp($))
+    }
     // The sonar (1.2): where the estate is, unless set on or off; a headless run never beats.
     if (sonarOn(s.config.sonar, estate()) && s.sessionId !== '') {
       const repo: any = await $.session.repo().catch(() => null)
@@ -1540,8 +2232,25 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    // F9: the id may have moved to a resumed one since the start; the ledger follows it first.
+    await followId($).catch(() => undefined)
+    $.clock.after(0, () => ticketIfMissing($).catch(() => undefined))
     const now = await $.clock.now()
     const mine = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    // The red for a refused write lasts until the next prompt (1.4.0).
+    const refused = await read($, refusalAtom)
+    if (refused !== null) {
+      await update($, noticesAtom, q => remove(q, refused.noticeId))
+      await update($, refusalAtom, () => null)
+      await endRed($, 'refusal', 'cleared', now)
+    }
+    // So does the haemorrhage's (1.7).
+    const bled: Haemorrhage | null = await read($, haemorrhageAtom)
+    if (bled !== null) {
+      await update($, noticesAtom, q => remove(q, bled.noticeId))
+      await update($, haemorrhageAtom, () => null)
+      await endRed($, 'haemorrhage', 'cleared', now)
+    }
     if (mine && s.watchHold && s.interactive) await takeWatch($, now)
     await update($, activityAtom, a => touch(a, now))
     if (mine) await update($, heardAtom, log => hear(log, { text: e.text, at: now }))
@@ -1616,8 +2325,12 @@ export const register: Register = (on, options) => {
       }
       call = held.e
     }
+    const blushId = await lightBlush($, call)
     const ran = await next(call)
     await recordRun($, call, ran)
+    const refused = await noteRefusal($, call, ran)
+    await landBlush($, blushId, refused || ran?.deny !== undefined || ran?.isError === true)
+    if (!refused) await noteHaemorrhage($, call, ran)
     return ran
   }).catch(($, e, next) => (next.called ? next(e) : isHeldSql(e) ? { deny: HOLD_FAILED } : next(e)))
 
@@ -1658,7 +2371,7 @@ export const register: Register = (on, options) => {
     // Marked ended: only now may a later session in this project take these leftovers. The three
     // start together (F2, 2026-10-09): the end chain shares one short wall-clock bound, and a save
     // that failed kept the ended beat from ever being written.
-    await Promise.allSettled([saveCarry($, true), saveFriction($), podTo($, 'ended')])
+    await Promise.allSettled([saveCarry($, true), saveFriction($), saveRoutines($), podTo($, 'ended')])
     const done = await next(e)
     // A /clear ends the conversation, not the process, and no session.start follows (engine
     // types, SessionEndInput): the pod follows the new id itself, or its next turn beats as the
@@ -1740,25 +2453,101 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'tackle' }, async $ => ({ text: await tackle($) }))
 
-  // /wear razor|compass|horns|none: what Phi holds, until changed or the session ends (1.1).
+  // /witness (1.3.4): the companion (compact since 1.3.9) and its own words. With no surface to place the
+  // pane (a headless run), the whole of it comes back as text.
+  on('command.run', { command: 'witness' }, async $ => {
+    const opened: any = await $.ui.open({ id: ABOUT_PANE, title: ABOUT_TITLE }).catch(() => null)
+    return { text: aboutReply(await aboutNow($), opened?.isPlaced !== false && opened !== null) }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: ABOUT_PANE }, async ($, e) => {
+    const ticket: Ticket | null = await read($, ticketAtom)
+    const metered = ticket?.kind === 'ok' && ticket.warnPush
+    const columns = e.props.bodyColumns
+    const view = buildView({
+      body: s.body,
+      frameIndex: await read($, frameAtom),
+      ledger: await read($, ledgerAtom),
+      asks: await read($, asksAtom),
+      activity: await read($, activityAtom),
+      now: await $.clock.now(),
+      speech: null,
+      hold: await read($, holdAtom),
+      refusal: await read($, refusalAtom),
+      haemorrhage: await read($, haemorrhageAtom),
+      blush: await read($, blushAtom),
+      lamp: await read($, lampAtom),
+      barnacles: await read($, barnaclesAtom),
+      candidates: await read($, candidatesAtom),
+      working: false,
+      rowsLanded: false,
+      maxRows: 0,
+      bodyColumns: columns,
+    })
+    return aboutTree($.ui.resolve(e), columns, view, await aboutNow($), metered)
+  })
+
+  // /wear razor|compass|horns|none: what Naut holds, until changed or the session ends (1.1).
   on('command.run', { command: 'wear' }, async ($, e) => {
     const costume = parseCostume(e.args)
     if (costume === null) return { text: 'Usage: /wear razor | compass | horns | devil | none' }
     await update($, costumeAtom, () => costume)
-    return { text: costume === 'none' ? 'Phi wears nothing.' : `Phi wears the ${costume}.` }
+    return { text: costume === 'none' ? 'Naut wears nothing.' : `Naut wears the ${costume}.` }
   })
 
   // /barnacles: the problems the barnacles record, each with a scrub (1.1, Bradley 2026-10-09).
   on('command.run', { command: 'barnacles' }, async $ => {
     const list: Barnacle[] = await read($, barnaclesAtom)
     const pairs: RepairPair[] = await read($, repairsAtom)
-    if (list.length === 0 && pairs.length === 0) {
-      return { text: 'No barnacles on the shell and no repair pairs: nothing has recurred, and no failure has been cured.' }
+    const gems = unsettled(await read($, candidatesAtom))
+    if (list.length === 0 && pairs.length === 0 && gems.length === 0) {
+      return { text: 'No barnacles on the shell, no repair pairs and no candidates: nothing has recurred, no failure has been cured, and nothing waits to be built.' }
     }
     await $.ui.open({ id: BARNACLES_PANE, title: 'Barnacles' })
     // The repair pairs (1.2) sit under the barnacles: a cured failure is friction with its cure.
     const kept = pairs.length > 0 ? ` and ${pairs.length} repair pair${pairs.length === 1 ? '' : 's'}` : ''
-    return { text: `${list.length} barnacle${list.length === 1 ? '' : 's'} on the shell${kept} - the list is open in the Barnacles pane.` }
+    const waiting = gems.length > 0 ? `, ${gems.length} candidate${gems.length === 1 ? '' : 's'} waiting (/jewels)` : ''
+    return { text: `${list.length} barnacle${list.length === 1 ? '' : 's'} on the shell${kept}${waiting} - the list is open in the Barnacles pane.` }
+  })
+
+  // /reds (1.10.0): the last 20 safelight events across this project's sessions, newest first.
+  on('command.run', { command: 'reds' }, async $ => {
+    const slots = await loadReds($, await $.clock.now(), false).catch(() => [] as RedSlot[])
+    return { text: redsList(slots).join('\n') }
+  })
+
+  // /jewels (1.6, Bradley 2026-10-11): every unsettled candidate in full. Take and dismiss are the
+  // Barnacles pane's old settle path (takeCandidate, settleCandidates). With no surface to place the
+  // pane, the same content comes back as text.
+  on('command.run', { command: 'jewels' }, async ($, e) => {
+    // 1.12: `/jewels taken` lists the taken jewels; `/jewels built 2 3` and `/jewels dismissed 4`
+    // record the ruling after a calibration. Anything else opens the pane as before.
+    const ask = parseRuling(e.args)
+    if (ask.kind === 'usage') return { text: 'Usage: /jewels | /jewels taken | /jewels built N [N...] | /jewels dismissed N [N...] (N is the number from /jewels taken, or a key)' }
+    if (ask.kind === 'list') return { text: rulingText(await freshCandidates($, true)) }
+    if (ask.kind === 'rule') return { text: await ruleCandidates($, ask.refs, ask.how) }
+    const opened: any = await $.ui.open({ id: JEWELS_PANE, title: JEWELS_TITLE }).catch(() => null)
+    const all = await freshCandidates($, true)
+    const { shown, queued } = await budgetedJewels($, all)
+    const own = [...shown, ...all.filter(c => c.settled !== undefined)]
+    const n = shown.length
+    if (opened?.isPlaced !== false && opened !== null) {
+      return { text: n === 0 ? 'Nothing is proposed yet - the Jewels pane is open.' : `${n} jewel${n === 1 ? '' : 's'} proposed - the list is open in the Jewels pane.` }
+    }
+    return { text: jewelsText(own, await $.clock.now(), 80, queued.length) }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: JEWELS_PANE }, async ($, e) => {
+    const all = await freshCandidates($)
+    const { shown, queued } = await budgetedJewels($, all)
+    const own = [...shown, ...all.filter(c => c.settled !== undefined)]
+    const items = jewelsList(own)
+    const act = {
+      onTake: async (c: Candidate) => $.ui.toast(await takeCandidate($, c.key)),
+      onDismiss: (c: Candidate) => settleCandidates($, [c.key], 'dismissed'),
+      onCalibrateAll: async () => $.ui.toast(await calibrateAll($, items)),
+    }
+    return jewelsTree($.ui.resolve(e), items, own, await $.clock.now(), e.props.bodyColumns, act, queued.length)
   })
 
   on('ui.render', { component: 'Pane', requestId: BARNACLES_PANE }, async ($, e) => {
@@ -1767,7 +2556,9 @@ export const register: Register = (on, options) => {
     const onScrub = (key: string) => scrubBarnacles($, key)
     const onScrubAll = () => scrubBarnacles($, null)
     const onTreat = async (key: string) => $.ui.toast(await treatBarnacle($, key))
-    return barnaclesTree($.ui.resolve(e), list, onScrub, onScrubAll, pairs.map(pairLine), onTreat)
+    // The candidates live in /jewels (1.6); this pane only points there.
+    const pointer = jewelsPointer((await budgetedJewels($, await freshCandidates($))).shown)
+    return barnaclesTree($.ui.resolve(e), list, onScrub, onScrubAll, pairs, onTreat, pointer)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -1802,7 +2593,7 @@ export const register: Register = (on, options) => {
           await update($, noticesAtom, q => dismiss(q, beneath, at))
         }
       : null
-    // The guest seam (1.3): a guest drawing standing narrow above the band puts the horns on Phi
+    // The guest seam (1.3): a guest drawing standing narrow above the band puts the horns on Naut
     // for this draw only; the costume atom is never written.
     const guest: any = splitBeneath(below).guest
     const guestKey = guest?.props?.key
@@ -1822,7 +2613,12 @@ export const register: Register = (on, options) => {
       now,
       speech,
       hold: await read($, holdAtom),
+      refusal: await read($, refusalAtom),
+      haemorrhage: await read($, haemorrhageAtom),
+      blush: await read($, blushAtom),
+      lamp: await read($, lampAtom),
       barnacles: await read($, barnaclesAtom),
+      candidates: await read($, candidatesAtom),
       working: e.props.isWorking,
       rowsLanded: speech?.header === 'BOARD',
       maxRows: 0,
@@ -1830,10 +2626,24 @@ export const register: Register = (on, options) => {
       facing: 'left',
     })
     const ticket = await read($, ticketAtom)
-    const footer = { n: shown.n, m: shown.m, onDismiss }
+    // The pager (1.3.8, Bradley 2026-10-11): the count's own `<` and `>` (1.4.1) step through what
+    // waits; none while a write is held.
+    const pageBy = (delta: number) => async () => {
+      const at = await $.clock.now()
+      await update($, noticesAtom, q => step(q, beneath, at, delta))
+    }
+    const footer = {
+      n: shown.n,
+      m: shown.m,
+      onDismiss,
+      onPrev: shown.pages ? pageBy(-1) : null,
+      onNext: shown.pages ? pageBy(1) : null,
+    }
     // The sonar's part of the one line (1.2): `pods N`, `!K` in warning colour while files overlap.
     const pods: SonarView = await read($, sonarAtom)
     const sonar = s.sonarDir === null ? null : { text: bandPods(pods.pods, pods.overlaps), warn: pods.overlaps.length > 0 }
-    return bandTree($.ui.resolve(e), e.props.bodyColumns, view, below, EYE_ROW[s.body][view.size], ticket, footer, sonar)
+    // Paged away from the note from beneath, the bubble voices the notice paged to instead.
+    const noteShows = !beneath || shown.beneath
+    return bandTree($.ui.resolve(e), e.props.bodyColumns, view, below, EYE_ROW[s.body][view.size], ticket, footer, sonar, noteShows)
   })
 }
